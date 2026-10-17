@@ -44,7 +44,9 @@ def classify(rgb):
         return OTHER
     r, g, b = rgb
     sat = max(rgb) - min(rgb)
-    if sat < 18 and max(rgb) > 45:  # grey asphalt (slightly green-tinted here) and white paint on it
+    # grey asphalt (slightly green-tinted here, green excess up to ~+8) and white paint on it; a shaded grass verge
+    # is just as unsaturated but clearly greener (+9 and more) and used to be taken for asphalt
+    if sat < 18 and max(rgb) > 45 and g - max(r, b) < 9:
         return ASPHALT
     if g >= max(r, b) + 5:
         return GRASS
@@ -104,3 +106,20 @@ def kerb_widths(samples, left, kerb_id, classify_at, max_m=3.0, step=0.08, run_m
         ws.sort()
         out[j] = (ws[min(len(ws) - 1, int(0.8 * len(ws)))], len(ws))
     return out
+
+
+def ray_hit(origin, direction, polylines, max_t):
+    """Distance along a ray to the nearest polyline segment it crosses, or None."""
+    (ox, oy), (dx, dy) = origin, direction
+    best = None
+    for line in polylines:
+        for (ax, ay), (bx, by) in zip(line, line[1:]):
+            ex, ey = bx - ax, by - ay
+            den = dx * ey - dy * ex
+            if abs(den) < 1e-12:
+                continue
+            t = ((ax - ox) * ey - (ay - oy) * ex) / den
+            u = ((ax - ox) * dy - (ay - oy) * dx) / den
+            if 0 <= t <= max_t and 0 <= u <= 1 and (best is None or t < best):
+                best = t
+    return best

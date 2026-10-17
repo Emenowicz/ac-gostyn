@@ -226,12 +226,26 @@ def fit_centreline(cfg, force):
         sys.exit("fit rewrites data/centerline.csv - commit it first, then run with --force")
     ortho = fit.Ortho(os.path.join(CACHE, "ortho.bmp"), os.path.join(CACHE, "ortho.json"))
     _, pts = trackgen.load(TRACK_JSON, CENTERLINE)
+    feats = trackgen.load_features(FEATURES) or {}
+    barriers = [b["points"] for b in feats.get("barriers", [])]
+    plates = [p["points"] + p["points"][:1] for p in feats.get("extra_asphalt", [])]
     samples, length0 = trackgen.resample(pts, cfg["fit_step_m"])
     n, r = len(samples), 3
     for _ in range(2):  # re-centre, then measure again from the new centre
         ds = sum(math.dist(a[:2], b[:2]) for a, b in zip(samples, samples[1:] + samples[:1])) / n
         _, left, _ = trackgen.frames(samples, ds)
         edges = fit.fit_edges(samples, left, ortho.classify)
+        # a traced tyre barrier is a hard track edge: where asphalt continues past it (junctions, paddock access),
+        # the edge stops just inside the barrier instead of following the other road
+        # traced extra-asphalt plates (paddock access, connectors, shortcuts) are not the track either: the edge
+        # stops where such a plate begins
+        def limit(origin, direction, d):
+            hits = [h - c for lines, c in ((barriers, clear), (plates, 0.0))
+                    if (h := fit.ray_hit(origin, direction, lines, d + c)) is not None]
+            return min([d] + hits)
+        clear = cfg["wall_thickness_m"] / 2 + 0.3
+        edges = [e if e is None else tuple(limit(sm[:2], (side * nx, side * ny), d) for d, side in zip(e, (1, -1)))
+                 for e, sm, (nx, ny) in zip(edges, samples, left)]
         bad = [e is None or not cfg["width_sanity_m"][0] <= sum(e) <= cfg["width_sanity_m"][1] for e in edges]
         if sum(bad) > n / 3:
             sys.exit(f"{sum(bad)}/{n} samples without a clear asphalt edge - is the orthophoto aligned?")

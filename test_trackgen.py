@@ -3,6 +3,7 @@ import json
 import math
 import os
 
+import fit
 import trackgen
 
 R = 50.0
@@ -45,4 +46,14 @@ for e in geo["empties"]:
 # a broken input (two points far apart) must be flagged
 broken = pts[:8] + [(p[0] + 200, p[1], 0.0, 8.0) for p in pts[8:]]
 assert trackgen.validate(cfg, broken, trackgen.build(cfg, broken))[0]
+# edge fitting: 8 m asphalt, white edge line, then a shaded greenish verge (unsaturated, like asphalt) -> edge on the line
+def photo(x, y):
+    d = abs(y)
+    return (120, 125, 124) if d < 3.9 else (230, 230, 228) if d < 4.0 else (88, 101, 90) if d < 5.0 else (110, 135, 100)
+road = [[float(x), 0.0, 0.0, 8.0] for x in range(5)]
+e = fit.fit_edges(road, [(0.0, 1.0)] * 5, lambda x, y: fit.classify(photo(x, y)))
+assert all(abs(a - 4.0) < 0.15 and abs(b - 4.0) < 0.15 for a, b in e), e
+
+assert abs(fit.ray_hit((0, 0), (0, 1), [[(-1, 3), (1, 3)]], 5) - 3) < 1e-9 and fit.ray_hit((0, 0), (0, 1), [[(-1, 3), (1, 3)]], 2) is None
+
 print("ok", f"{geo['length']:.2f} m,", sum(len(o['faces']) for o in geo['objects']), "faces")

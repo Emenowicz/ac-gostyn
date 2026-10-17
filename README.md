@@ -137,6 +137,7 @@ Ponowne pobranie danych źródłowych (zwykle niepotrzebne, wynik jest w repo):
 python3 build.py import-osm --force       # oś początkowa z OpenStreetMap
 python3 build.py fetch-ortho              # ortofotomapa GUGiK -> build/cache/ (poza repo)
 python3 build.py fit --force              # oś + szerokość dopasowane do asfaltu na ortofotomapie
+                                          # (krawędź nie wychodzi za odrysowane bandy ani na płyty extra_asphalt)
 python3 build.py fetch-elevation          # wysokości NMT GUGiK
 python3 build.py fit-kerbs                # szerokość każdej tarki zmierzona na ortofotomapie -> features.json
 ```
