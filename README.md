@@ -15,7 +15,7 @@ uruchamiany z wiersza poleceń eksportuje FBX, a ksEditor (narzędzie z AC) zami
 | Wysokość | 90,3–91,2 m n.p.m. |
 | Kierunek | zgodnie z ruchem wskazówek zegara |
 | Pola startowe / boksy | 10 / 10 |
-| Rekord toru (gokarty z wypożyczalni) | 50,434 s – punkt odniesienia przy strojeniu fizyki |
+| Rekord toru (gokarty z wypożyczalni) | 50,434 s; tempo wyścigowe ok. 54 s – punkty odniesienia przy strojeniu fizyki |
 
 ---
 
@@ -129,7 +129,7 @@ w modelu. Po zmianie uruchom `python3 build.py validate` i obejrzyj `build/ortho
 | `data/track.json` | parametry; lista `placeholder` to wartości tymczasowe, `sources` to źródła danych |
 
 Współrzędne są w metrach względem punktu `origin_lat_lon` z `track.json`. Tarka powstaje tam, gdzie krawędź asfaltu
-leży bliżej niż `kerb_snap_m` od linii z `kerbs`. Banda z `"on_kerb": true` może stać na tarce.
+leży bliżej niż `kerb_snap_m` od linii z `kerbs`. Banda z `"on_kerb": true` może stać na tarce, a `"height"` nadpisuje jej wysokość (np. 0,25 m dla pojedynczej opony leżącej przy wierzchołku).
 
 Ponowne pobranie danych źródłowych (zwykle niepotrzebne, wynik jest w repo):
 ```

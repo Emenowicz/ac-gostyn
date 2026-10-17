@@ -306,7 +306,9 @@ def build(cfg, pts, ground=None, features=None, photo=None):
     extent = ((photo["x0"], photo["y0"], photo["x1"], photo["y1"]) if photo else
               (min(p[0] for p in pts_all) - m, min(p[1] for p in pts_all) - m,
                max(p[0] for p in pts_all) + m, max(p[1] for p in pts_all) + m))
-    walls = [part for line in barriers.values() for part in _barrier(line, z_at, cfg["wall_height_m"], cfg["wall_thickness_m"])]
+    heights = {b["name"]: b.get("height", cfg["wall_height_m"]) for b in (features or {}).get("barriers", [])}
+    walls = [part for name, line in barriers.items()
+             for part in _barrier(line, z_at, heights.get(name, cfg["wall_height_m"]), cfg["wall_thickness_m"])]
     x0, y0, x1, y1 = (v + d for v, d in zip(extent, (1, 1, -1, -1)))  # perimeter, so nobody drives off the world
     objects.append(_merge("1WALL", "wall", walls))
     objects.append(_merge("2WALL", "concrete", _barrier([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], z_at, 2.0, 0.5)))

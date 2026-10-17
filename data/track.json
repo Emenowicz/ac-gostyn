@@ -50,6 +50,7 @@
     "length 800 m, width 7-10 m, 15 turns: https://kartodrom-gostyn.pl/tor/ (2026-10-17)",
     "centreline + width: fitted to GUGiK orthophoto (Geoportal.gov.pl) by build.py fit",
     "lap record 50.434 s (rental karts, 2025): https://kartodrom-gostyn.pl/rekordy/ - target for physics tuning",
+    "race pace ~54 s/lap (20 laps, Monaco Extra 27.07.2026 onboard: youtube.com/watch?v=JqjP0Bvsnjk); apex tyres are single tyres lying flat",
     "tyre walls ~0.6 m (2-3 tyres, red/yellow), kerbs red/yellow painted: estimated from track photos + onboard videos (youtube.com/@kartodromgostyn)",
     "kerbs cross-checked on a drone photo from Sept 2025 (provided by the project author): all visible kerbs are modelled; outer kerbs from the old PZM track plan no longer exist",
     "10 grid slots in two staggered columns: project author + PZM track plan; pit boxes placed on the grid slots",

@@ -1,5 +1,5 @@
 {
-  "_note": "on_kerb: tyres verified on the photo to lie on the kerb (apex markers). Traced by hand from the GUGiK orthophoto (build/cache/ortho.bmp) on a 5 m grid, ~0.5-1 m accuracy. Local metres (x east, y north) as in centerline.csv. Edit and re-run `build.py validate` - check build/ortho_overlay.svg.",
+  "_note": "on_kerb: tyres verified on the photo to lie on the kerb (apex markers). height: per-barrier override of wall_height_m (apex markers are single tyres lying flat, onboard video 27.07.2026). Traced by hand from the GUGiK orthophoto (build/cache/ortho.bmp) on a 5 m grid, ~0.5-1 m accuracy. Local metres (x east, y north) as in centerline.csv. Edit and re-run `build.py validate` - check build/ortho_overlay.svg.",
   "start_finish": [[81.75, 36.9], [91.9, 35.5]],
   "barriers": [
     {"name": "paddock_fence", "points": [[57.2, 77.2], [57.2, 82.2], [59.4, 82.6], [71.3, 83.3], [78.8, 82.8], [88.1, 81.4]]},
@@ -17,7 +17,7 @@
     {"name": "hairpin_c_divider", "points": [[20.3, 5.0], [17.5, -10.0], [15.0, -21.9]]},
     {"name": "tyre_ring", "points": [[38.45, 2.5], [37.81, 4.06], [36.25, 4.7], [34.69, 4.06], [34.05, 2.5], [34.69, 0.94], [36.25, 0.3], [37.81, 0.94], [38.45, 2.5]]},
     {"name": "infield_long", "points": [[37.2, 0.0], [35.6, -10.0], [33.75, -18.75], [31.9, -26.25], [30.0, -33.1], [27.5, -35.3], [15.0, -35.6], [-0.6, -35.3], [-3.1, -35.0], [-5.6, -33.4], [-7.5, -35.6], [-10.0, -38.0], [-13.75, -42.5], [-18.75, -49.4], [-23.75, -54.4], [-30.0, -57.5], [-36.25, -58.75], [-43.1, -59.7], [-50.0, -61.2], [-60.0, -60.9], [-85.0, -58.1]]},
-    {"name": "hairpin_w_apex", "points": [[-84.83, -51.48], [-86.06, -55.04], [-85.9, -57.5]], "on_kerb": true},
+    {"name": "hairpin_w_apex", "points": [[-84.83, -51.48], [-86.06, -55.04], [-85.9, -57.5]], "on_kerb": true, "height": 0.25},
     {"name": "shortcut_w_left", "points": [[-50.83, -35.33], [-47.22, -37.2], [-44.66, -39.39], [-42.7, -42.13]]},
     {"name": "shortcut_w_right", "points": [[-27.68, -31.69], [-30.21, -35.46], [-32.33, -40.15]], "on_kerb": true}
   ],
