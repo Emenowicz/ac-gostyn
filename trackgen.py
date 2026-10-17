@@ -252,15 +252,18 @@ def build(cfg, pts, ground=None, features=None):
         for sm, z in zip(samples, _box(_box([sm[2] for sm in samples], r), r)):
             sm[2] = z
     tang, left, curv = frames(samples, ds)
-    caps = clearance(samples, left)
-    r = max(1, round(5 / ds))
-    caps = {s: _box(_min_filter(c, r), r) for s, c in caps.items()}  # smoothed, never above the raw cap
+    raw_caps = clearance(samples, left)
+    r = max(1, round(cfg.get("offset_smooth_m", 5) / ds))
+    caps = {s: _box(_min_filter(c, r), r) for s, c in raw_caps.items()}  # smoothed, never above the raw cap
 
     half = [s[3] / 2 for s in samples]
     kerb_out, wall_off = {}, {}
     for side in (1, -1):
-        kerb_out[side] = [max(h + 0.1, min(h + cfg["kerb_width_m"], c - 0.2)) for h, c in zip(half, caps[side])]
-        wall_off[side] = [max(ko + 0.1, min(h + cfg["kerb_width_m"] + cfg["runoff_m"], 0.95 * c))
+        # kerbs keep a constant width along the asphalt edge (as painted) unless the free space really ends;
+        # the raw cap is used because the smoothed one also narrows the kerb before and after a tight apex
+        kerb_out[side] = [max(h + 0.1, min(h + cfg["kerb_width_m"], 0.9 * c)) for h, c in zip(half, raw_caps[side])]
+        # run-off just stops where space runs out (the terrain covers the rest) instead of pinching into a notch
+        wall_off[side] = [ko + 0.1 if 0.85 * c - ko < 0.5 else min(h + cfg["kerb_width_m"] + cfg["runoff_m"], 0.85 * c)
                           for h, ko, c in zip(half, kerb_out[side], caps[side])]
     if features:  # kerbs where the asphalt edge runs along a traced kerb strip
         lines = [k["points"] for k in features.get("kerbs", [])]
@@ -433,6 +436,20 @@ def validate(cfg, pts, geo):
     if worst > 1.5 * geo["ds"]:
         errors.append(f"surface discontinuity: sample spacing {worst:.2f} m > 1.5 x {geo['ds']:.2f} m")
 
+    tang = frames(sm, geo["ds"])[0]
+    for key in ("edge_l", "edge_r"):  # run-off edge must move forward with the track, never fold back
+        line = geo["polylines"][key]
+        back = [i for i in range(len(sm)) if (line[i + 1][0] - line[i][0]) * tang[i][0] + (line[i + 1][1] - line[i][1]) * tang[i][1] < 0]
+        if back:
+            errors.append(f"{key} folds back at {len(back)} samples, first near ({line[back[0]][0]:.0f}, {line[back[0]][1]:.0f})")
+    for key in ("road_l", "road_r"):  # a very tight inner edge makes kerbs/run-off pinch into a notch
+        line = geo["polylines"][key]
+        for i in range(3, len(line) - 3):
+            a, b, c = line[i - 3], line[i], line[i + 3]
+            area2 = abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
+            if area2 > 1e-9 and math.dist(a[:2], b[:2]) * math.dist(b[:2], c[:2]) * math.dist(c[:2], a[:2]) / (2 * area2) < 2.5:
+                warnings.append(f"{key}: asphalt edge radius < 2.5 m near ({b[0]:.0f}, {b[1]:.0f}) - raise smooth_m or check the width")
+                break
     for group in (geo["polylines"], {"road_l": geo["polylines"]["road_l"], "road_r": geo["polylines"]["road_r"],
                                      **geo["barriers"]}):
         names = list(group)

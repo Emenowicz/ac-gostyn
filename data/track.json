@@ -33,7 +33,7 @@
   "sample_step_m": 1.0,
   "fit_step_m": 2.0,
   "width_sanity_m": [5.0, 13.0],
-  "smooth_m": 1.0,
+  "smooth_m": 2.0,
   "z_smooth_m": 6.0,
   "max_grade": 0.08,
   "max_input_gap_m": 20.0,
