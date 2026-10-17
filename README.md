@@ -84,6 +84,8 @@ build/ortho_overlay.svg                   model na ortofotomapie – otwórz w p
    |---|---|---|
    | `road` | `road.png` | asfalt, płyty dodatkowego asfaltu |
    | `kerb` | `kerb.png` | tarki (paski czerwono-żółte) |
+   | `paint_white` | `paint_white.png` | białe linie krawędzi (obiekt `LINES_WHITE`, bez fizyki) |
+   | `paint_yellow` | `paint_yellow.png` | żółta przerywana linia środkowa (obiekt `LINES_YELLOW`, bez fizyki) |
    | `wall` | `wall.png` | bandy z opon |
    | `concrete` | `concrete.png` | mur na brzegu terenu |
    | `ortho` | `ortho.png` | teren i pobocze (ortofotomapa) |
@@ -129,7 +131,7 @@ w modelu. Po zmianie uruchom `python3 build.py validate` i obejrzyj `build/ortho
 | `data/track.json` | parametry; lista `placeholder` to wartości tymczasowe, `sources` to źródła danych |
 
 Współrzędne są w metrach względem punktu `origin_lat_lon` z `track.json`. Tarka powstaje tam, gdzie krawędź asfaltu
-leży bliżej niż `kerb_snap_m` od linii z `kerbs`. Banda z `"on_kerb": true` może stać na tarce, a `"height"` nadpisuje jej wysokość (np. 0,25 m dla pojedynczej opony leżącej przy wierzchołku).
+leży bliżej niż `kerb_snap_m` od linii z `kerbs`; jej szerokość to `width` tej tarki (zmierzona przez `fit-kerbs`). Banda z `"on_kerb": true` może stać na tarce, a `"height"` nadpisuje jej wysokość (np. 0,25 m dla pojedynczej opony leżącej przy wierzchołku).
 
 Ponowne pobranie danych źródłowych (zwykle niepotrzebne, wynik jest w repo):
 ```
@@ -137,6 +139,7 @@ python3 build.py import-osm --force       # oś początkowa z OpenStreetMap
 python3 build.py fetch-ortho              # ortofotomapa GUGiK -> build/cache/ (poza repo)
 python3 build.py fit --force              # oś + szerokość dopasowane do asfaltu na ortofotomapie
 python3 build.py fetch-elevation          # wysokości NMT GUGiK
+python3 build.py fit-kerbs                # szerokość każdej tarki zmierzona na ortofotomapie -> features.json
 ```
 `fit` i `import-osm` nadpisują `data/centerline.csv` – najpierw zacommituj zmiany.
 
@@ -153,14 +156,14 @@ data/*.csv, *.json ──> trackgen.py ──> build/mesh.json ──> blender_b
 - `blender_build.py` – uruchamiany w Blenderze: obiekty, tekstury, punkty AC, eksport FBX.
 
 Obiekty w AC (pierwsza cyfra + nazwa nawierzchni = fizyka): `1ROAD`, `2ROAD`, `1KERB`, `1GRASS`, `2GRASS` (teren),
-`1WALL` (opony), `2WALL` (mur). Punkty: `AC_START_0..9`, `AC_PIT_0..9`, `AC_TIME_0_L/R`, `AC_HOTLAP_START_0`.
+`1WALL` (opony), `2WALL` (mur). Bez fizyki: `LINES_WHITE`, `LINES_YELLOW`. Punkty: `AC_START_0..9`, `AC_PIT_0..9`, `AC_TIME_0_L/R`, `AC_HOTLAP_START_0`.
 
 ## 8. Do zrobienia
 
 - strojenie fizyki po pierwszym przejeździe (cel: 50–52 s);
 - linia AI (`ai/fast_lane.ai`, nagrywana w grze);
 - mapa toru, obrazki do menu (`ui/preview.png`, `ui/outline.png`), kamery do powtórek;
-- tekstura asfaltu z białymi liniami, budynki i drzewa.
+- tekstura asfaltu (łaty, pęknięcia), linie pól startowych, pachołki przy wierzchołkach, budynki i drzewa.
 
 ## Źródła danych i licencje
 

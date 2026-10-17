@@ -257,20 +257,29 @@ def build(cfg, pts, ground=None, features=None, photo=None):
     caps = {s: _box(_min_filter(c, r), r) for s, c in raw_caps.items()}  # smoothed, never above the raw cap
 
     half = [s[3] / 2 for s in samples]
+    kw = cfg["kerb_width_m"]
+    if features:  # kerbs where the asphalt edge runs along a traced kerb strip; each strip may carry its measured width
+        klines = features.get("kerbs", [])
+
+        def nearest_kerb(p):
+            d, j = min(((_dist_to_polyline(p, k["points"]), j) for j, k in enumerate(klines)), default=(math.inf, None))
+            return j if d < cfg["kerb_snap_m"] else None
+        kerb_id = {side: [nearest_kerb((sm[0] + side * h * l[0], sm[1] + side * h * l[1])) for sm, h, l in zip(samples, half, left)]
+                   for side in (1, -1)}
+        kerb = {side: [j is not None for j in ids] for side, ids in kerb_id.items()}
+        kwidth = {side: [klines[j].get("width", kw) if j is not None else kw for j in ids] for side, ids in kerb_id.items()}
+    else:  # fallback: inside of corners
+        kerb_id = {side: [None] * n for side in (1, -1)}
+        kerb = {side: [side * k > cfg["kerb_min_curvature"] for k in curv] for side in (1, -1)}
+        kwidth = {side: [kw] * n for side in (1, -1)}
     kerb_out, wall_off = {}, {}
     for side in (1, -1):
         # kerbs keep a constant width along the asphalt edge (as painted) unless the free space really ends;
         # the raw cap is used because the smoothed one also narrows the kerb before and after a tight apex
-        kerb_out[side] = [max(h + 0.1, min(h + cfg["kerb_width_m"], 0.9 * c)) for h, c in zip(half, raw_caps[side])]
+        kerb_out[side] = [max(h + 0.1, min(h + w, 0.9 * c)) for h, w, c in zip(half, kwidth[side], raw_caps[side])]
         # run-off just stops where space runs out (the terrain covers the rest) instead of pinching into a notch
-        wall_off[side] = [ko + 0.1 if 0.85 * c - ko < 0.5 else min(h + cfg["kerb_width_m"] + cfg["runoff_m"], 0.85 * c)
+        wall_off[side] = [ko + 0.1 if 0.85 * c - ko < 0.5 else min(max(h + kw + cfg["runoff_m"], ko + 0.5), 0.85 * c)
                           for h, ko, c in zip(half, kerb_out[side], caps[side])]
-    if features:  # kerbs where the asphalt edge runs along a traced kerb strip
-        lines = [k["points"] for k in features.get("kerbs", [])]
-        kerb = {side: [any(_dist_to_polyline((sm[0] + side * h * l[0], sm[1] + side * h * l[1]), line) < cfg["kerb_snap_m"]
-                           for line in lines) for sm, h, l in zip(samples, half, left)] for side in (1, -1)}
-    else:  # fallback: inside of corners
-        kerb = {side: [side * k > cfg["kerb_min_curvature"] for k in curv] for side in (1, -1)}
 
     def rows(offs, dz=0.0):
         out = []
@@ -283,6 +292,14 @@ def build(cfg, pts, ground=None, features=None, photo=None):
     every = [True] * n
     road_l, road_r = rows(half), rows([-h for h in half])
     objects = [_merge("1ROAD", "road", [_strip(road_r, road_l, every, False)])]
+    # painted lines: visual only (no digit prefix = no physics in AC), lifted 5 mm so they don't z-fight the asphalt
+    lift, lw = 0.005, cfg["line_width_m"]
+    edge_lines = [_strip(rows([side * (h - lw - 0.05) for h in half], lift), rows([side * (h - 0.05) for h in half], lift),
+                         every, side < 0) for side in (1, -1)]
+    dash, gap = cfg["centre_dash_m"]
+    dashes = [(i * ds) % (dash + gap) < dash for i in range(n)]
+    objects.append(_merge("LINES_WHITE", "paint_white", edge_lines))
+    objects.append(_merge("LINES_YELLOW", "paint_yellow", [_strip(rows([-lw / 2] * n, lift), rows([lw / 2] * n, lift), dashes, False)]))
     kerbs, grass, outer = [], [], {}
     for side in (1, -1):
         edge = road_l if side == 1 else road_r
@@ -335,7 +352,7 @@ def build(cfg, pts, ground=None, features=None, photo=None):
         "objects": objects, "empties": _empties(cfg, samples, tang, left, ds, features),
         "polylines": {"road_l": [p for p, _ in road_l], "road_r": [p for p, _ in road_r],
                       "edge_l": edge_lines[1], "edge_r": edge_lines[-1]},
-        "barriers": barriers,
+        "barriers": barriers, "kerb_id": kerb_id, "left": left,
         "on_kerb": {b["name"] for b in (features or {}).get("barriers", []) if b.get("on_kerb")},
         "corners": sum(1 for i in range(n) if (abs(curv[i]) > cfg["kerb_min_curvature"])
                        and not abs(curv[i - 1]) > cfg["kerb_min_curvature"]),

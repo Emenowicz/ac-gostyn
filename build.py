@@ -4,6 +4,7 @@
   python3 build.py fetch-ortho            download GUGiK orthophoto of the area -> build/cache/ortho.bmp
   python3 build.py fit --force            snap centreline + per-point width to the asphalt on the orthophoto
   python3 build.py fetch-elevation        GUGiK NMT heights -> z in data/centerline.csv + data/elevation.csv
+  python3 build.py fit-kerbs              measure each traced kerb's painted width on the orthophoto -> features.json
   python3 build.py validate               build geometry, validate, write build/mesh.json + build/preview.svg
   python3 build.py mod                    write mod folder (models.ini, surfaces.ini, ui_track.json)
   python3 build.py fbx                    validate + Blender headless -> build/fbx/<folder>.fbx
@@ -138,6 +139,43 @@ def fetch_elevation(cfg):
         f.write(f"# Terrain heights, GUGiK NMT (m a.s.l., PL-EVRF2007-NH), {c} m grid, fetched {date.today()}.\nx,y,h\n")
         f.writelines(f"{x:.1f},{y:.1f},{h:.2f}\n" for (x, y), h in zip(grid, nmt_heights(cfg, grid)))
     print(f"z written to {len(rows)} centreline points, {len(grid)} terrain points -> {ELEVATION}")
+
+
+def write_features(feats):
+    """features.json with one item per line, so hand edits and git diffs stay readable."""
+    lines = ["{"]
+    keys = list(feats)
+    for n, key in enumerate(keys):
+        comma = "," if n < len(keys) - 1 else ""
+        value = feats[key]
+        if isinstance(value, list) and value and isinstance(value[0], dict):
+            items = [json.dumps(item, ensure_ascii=False) for item in value]
+            lines.append(f'  "{key}": [\n    ' + ",\n    ".join(items) + f"\n  ]{comma}")
+        else:
+            lines.append(f'  "{key}": {json.dumps(value, ensure_ascii=False)}{comma}')
+    with open(FEATURES, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n}\n")
+
+
+def fit_kerbs(cfg):
+    ortho = fit.Ortho(os.path.join(CACHE, "ortho.bmp"), os.path.join(CACHE, "ortho.json"))
+    _, pts = trackgen.load(TRACK_JSON, CENTERLINE)
+    feats = trackgen.load_features(FEATURES)
+    for k in feats["kerbs"]:
+        k.pop("width", None)  # measure from scratch, not from the previous result
+    geo = trackgen.build(cfg, pts, None, feats)
+    measured = fit.kerb_widths(geo["samples"], geo["left"], geo["kerb_id"], ortho.classify)
+    lo, hi = cfg["kerb_width_range_m"]
+    for j, k in enumerate(feats["kerbs"]):
+        if j not in measured:
+            print(f"  {k['name']:<22} not on the asphalt edge - width left at default")
+            continue
+        w, count = measured[j]
+        k["width"] = round(min(max(w, lo), hi), 1)
+        note = "" if lo <= w <= hi else f"  (measured {w:.2f}, clamped)"
+        print(f"  {k['name']:<22} {k['width']:.1f} m from {count} samples{note}")
+    write_features(feats)
+    print(f"wrote kerb widths to {FEATURES}")
 
 
 def fetch(url, timeout=120):
@@ -357,7 +395,7 @@ def export_fbx(cfg):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["import-osm", "fetch-ortho", "fit", "fetch-elevation", "validate", "mod", "fbx", "all"])
+    ap.add_argument("command", choices=["import-osm", "fetch-ortho", "fit", "fetch-elevation", "fit-kerbs", "validate", "mod", "fbx", "all"])
     ap.add_argument("--force", action="store_true", help="import-osm / fit: overwrite data/centerline.csv")
     args = ap.parse_args()
     with open(TRACK_JSON, encoding="utf-8") as f:
@@ -370,6 +408,8 @@ def main():
         return fit_centreline(cfg, args.force)
     if args.command == "fetch-elevation":
         return fetch_elevation(cfg)
+    if args.command == "fit-kerbs":
+        return fit_kerbs(cfg)
     geo = generate(cfg)
     if args.command in ("fbx", "all"):
         export_fbx(cfg)

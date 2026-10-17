@@ -77,3 +77,30 @@ def fit_edges(samples, left, classify_at, max_m=8.0, step=0.1, run_m=0.5):
             dists.append(found)
         out.append(None if None in dists else tuple(dists))
     return out
+
+
+def kerb_widths(samples, left, kerb_id, classify_at, max_m=3.0, step=0.08, run_m=0.3):
+    """Painted-kerb width per traced kerb: distance from the asphalt edge to the first run of >= run_m grass.
+
+    kerb_id: {side: [kerb index or None per sample]} as built by trackgen. Returns {kerb index: (width, n samples)}.
+    """
+    found = {}
+    for side, ids in kerb_id.items():
+        for s, (nx, ny), j in zip(samples, left, ids):
+            if j is None:
+                continue
+            h, t, run = s[3] / 2, 0.0, 0
+            while t <= max_m:
+                if classify_at(s[0] + side * (h + t) * nx, s[1] + side * (h + t) * ny) == GRASS:
+                    run += 1
+                    if run * step >= run_m:
+                        found.setdefault(j, []).append(t - run * step + step)
+                        break
+                else:
+                    run = 0
+                t += step
+    out = {}
+    for j, ws in found.items():  # kerbs taper at both ends and the edge is noisy: take the full-width part (80th pct)
+        ws.sort()
+        out[j] = (ws[min(len(ws) - 1, int(0.8 * len(ws)))], len(ws))
+    return out
