@@ -31,6 +31,8 @@
   "fit_step_m": 2.0,
   "width_sanity_m": [5.0, 13.0],
   "smooth_m": 1.0,
+  "z_smooth_m": 6.0,
+  "max_grade": 0.08,
   "max_input_gap_m": 20.0,
   "terrain_margin_m": 40.0,
   "terrain_cell_m": 4.0,
@@ -38,13 +40,14 @@
   "ortho_px_per_m": 12.0,
 
   "placeholder": [
-    "default_width_m", "start_xy (point along the straight)", "kerb_width_m", "kerb_min_curvature",
-    "runoff_m", "wall_height_m", "grid_slots", "grid_spacing_m", "pit_slots", "hotlap_back_m",
-    "elevation (z column empty -> 0)"
+    "start_xy (point along the straight)", "kerb_width_m", "kerb_min_curvature",
+    "runoff_m", "wall_height_m", "grid_slots", "grid_spacing_m", "pit_slots", "hotlap_back_m"
   ],
   "sources": [
     "length 800 m, width 7-10 m, 15 turns: https://kartodrom-gostyn.pl/tor/ (2026-10-17)",
-    "centreline: OpenStreetMap ways 378990687 + 558923489, (c) OpenStreetMap contributors, ODbL",
+    "centreline + width: fitted to GUGiK orthophoto (Geoportal.gov.pl) by build.py fit",
+    "elevation: GUGiK NMT (services.gugik.gov.pl/nmt), m a.s.l.",
+    "centreline start: OpenStreetMap ways 378990687 + 558923489, (c) OpenStreetMap contributors, ODbL",
     "start/finish on the long east straight (83 m OSM gap), direction toward the parallel straight via the hairpin: local knowledge from the project author (2026-10-17)"
   ]
 }

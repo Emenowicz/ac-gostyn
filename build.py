@@ -3,6 +3,7 @@
   python3 build.py import-osm [--force]   fetch centreline from OpenStreetMap -> data/centerline.csv
   python3 build.py fetch-ortho            download GUGiK orthophoto of the area -> build/cache/ortho.bmp
   python3 build.py fit --force            snap centreline + per-point width to the asphalt on the orthophoto
+  python3 build.py fetch-elevation        GUGiK NMT heights -> z in data/centerline.csv + data/elevation.csv
   python3 build.py validate               build geometry, validate, write build/mesh.json + build/preview.svg
   python3 build.py mod                    write mod folder (models.ini, surfaces.ini, ui_track.json)
   python3 build.py fbx                    validate + Blender headless -> build/fbx/<folder>.fbx
@@ -31,6 +32,8 @@ CENTERLINE = os.path.join(ROOT, "data", "centerline.csv")
 BUILD = os.path.join(ROOT, "build")
 CACHE = os.path.join(BUILD, "cache")
 ORTHO_WMS = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/HighResolution"
+NMT = "https://services.gugik.gov.pl/nmt/?request=GetHByPointList&list="
+ELEVATION = os.path.join(ROOT, "data", "elevation.csv")
 EARTH_R = 6371008.8
 
 # OSM ways A, B. A[0]->A[1] is a 27 m chord duplicating B's last 38 m arc, so the loop is A[1:] + B[1:]
@@ -81,6 +84,59 @@ def to_local(cfg, lat, lon):
 def to_latlon(cfg, x, y):
     lat0, lon0 = cfg["origin_lat_lon"]
     return lat0 + math.degrees(y / EARTH_R), lon0 + math.degrees(x / (EARTH_R * math.cos(math.radians(lat0))))
+
+
+def to_pl1992(lat, lon):
+    """WGS84 -> EPSG:2180 (PUWG 1992) as (x northing, y easting), Krueger series (mm accuracy)."""
+    f = 1 / 298.257222101  # GRS80
+    n = f / (2 - f)
+    A = 6378137.0 / (1 + n) * (1 + n ** 2 / 4 + n ** 4 / 64)
+    alpha = (n / 2 - 2 * n ** 2 / 3 + 5 * n ** 3 / 16, 13 * n ** 2 / 48 - 3 * n ** 3 / 5, 61 * n ** 3 / 240)
+    e = 2 * math.sqrt(n) / (1 + n)
+    phi, lam = math.radians(lat), math.radians(lon - 19.0)
+    t = math.sinh(math.atanh(math.sin(phi)) - e * math.atanh(e * math.sin(phi)))
+    xi, eta = math.atan2(t, math.cos(lam)), math.atanh(math.sin(lam) / math.sqrt(1 + t * t))
+    xs = xi + sum(a * math.sin(2 * j * xi) * math.cosh(2 * j * eta) for j, a in enumerate(alpha, 1))
+    es = eta + sum(a * math.cos(2 * j * xi) * math.sinh(2 * j * eta) for j, a in enumerate(alpha, 1))
+    return 0.9993 * A * xs - 5300000.0, 0.9993 * A * es + 500000.0
+
+
+def nmt_heights(cfg, xy, batch=150):
+    out = []
+    for i in range(0, len(xy), batch):
+        pl = [to_pl1992(*to_latlon(cfg, x, y)) for x, y in xy[i:i + batch]]
+        body = fetch(NMT + urllib.parse.quote(",".join(f"{a:.2f} {b:.2f}" for a, b in pl))).decode().strip()
+        heights = [float(p.split()[2]) for p in body.split(",")]
+        if len(heights) != len(pl) or not all(0 < h < 1700 for h in heights):
+            sys.exit(f"unexpected NMT reply: {body[:300]}")
+        out += heights
+        print(f"  NMT {min(i + batch, len(xy))}/{len(xy)}", end="\r")
+    print()
+    return out
+
+
+def fetch_elevation(cfg):
+    with open(CENTERLINE, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    rows = [i for i, line in enumerate(lines) if line and not line.startswith("#") and not line.startswith("x,")]
+    xy = [tuple(map(float, lines[i].split(",")[:2])) for i in rows]
+    for i, h in zip(rows, nmt_heights(cfg, xy)):
+        x, y, _, w = lines[i].split(",")
+        lines[i] = f"{x},{y},{h:.2f},{w}"
+    lines.insert(next(i for i, line in enumerate(lines) if line.startswith("x,")),
+                 "# z = terrain height from GUGiK NMT (m a.s.l., PL-EVRF2007-NH), fetched by `build.py fetch-elevation`.")
+    with open(CENTERLINE, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+    with open(os.path.join(CACHE, "ortho.json")) as f:
+        m = json.load(f)  # terrain grid covers the orthophoto extent
+    c = cfg["terrain_cell_m"]
+    grid = [(m["x0"] + i * c, m["y0"] + j * c) for j in range(int((m["y1"] - m["y0"]) / c) + 1)
+            for i in range(int((m["x1"] - m["x0"]) / c) + 1)]
+    with open(ELEVATION, "w", encoding="utf-8") as f:
+        f.write(f"# Terrain heights, GUGiK NMT (m a.s.l., PL-EVRF2007-NH), {c} m grid, fetched {date.today()}.\nx,y,h\n")
+        f.writelines(f"{x:.1f},{y:.1f},{h:.2f}\n" for (x, y), h in zip(grid, nmt_heights(cfg, grid)))
+    print(f"z written to {len(rows)} centreline points, {len(grid)} terrain points -> {ELEVATION}")
 
 
 def fetch(url, timeout=120):
@@ -170,7 +226,7 @@ def fit_centreline(cfg, force):
 
 def generate(cfg):
     _, pts = trackgen.load(TRACK_JSON, CENTERLINE)
-    geo = trackgen.build(cfg, pts)
+    geo = trackgen.build(cfg, pts, trackgen.load_ground(ELEVATION))
     errors, warnings = trackgen.validate(cfg, pts, geo)
     for w in warnings:
         print("WARN ", w)
@@ -182,7 +238,8 @@ def generate(cfg):
     write_preview(geo, os.path.join(BUILD, "preview.svg"))
     if os.path.exists(os.path.join(CACHE, "ortho.json")):
         write_ortho_overlay(geo, pts, os.path.join(BUILD, "ortho_overlay.svg"))
-    print(f"length {geo['length']:.1f} m, {len(geo['samples'])} samples, "
+    zs = [p[2] for p in geo["samples"]]
+    print(f"elevation {min(zs):.2f}-{max(zs):.2f} m a.s.l., length {geo['length']:.1f} m, {len(geo['samples'])} samples, "
           f"{sum(len(o['faces']) for o in geo['objects'])} faces -> build/mesh.json, build/preview.svg")
     if errors:
         sys.exit(f"{len(errors)} validation error(s)")
@@ -287,7 +344,7 @@ def export_fbx(cfg):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["import-osm", "fetch-ortho", "fit", "validate", "mod", "fbx", "all"])
+    ap.add_argument("command", choices=["import-osm", "fetch-ortho", "fit", "fetch-elevation", "validate", "mod", "fbx", "all"])
     ap.add_argument("--force", action="store_true", help="import-osm / fit: overwrite data/centerline.csv")
     args = ap.parse_args()
     with open(TRACK_JSON, encoding="utf-8") as f:
@@ -298,6 +355,8 @@ def main():
         return fetch_ortho(cfg)
     if args.command == "fit":
         return fit_centreline(cfg, args.force)
+    if args.command == "fetch-elevation":
+        return fetch_elevation(cfg)
     geo = generate(cfg)
     if args.command in ("fbx", "all"):
         export_fbx(cfg)

@@ -5,6 +5,7 @@ Pure stdlib, so it runs (and is testable) without Blender. Coordinates: x east, 
 import csv
 import json
 import math
+import os
 from collections import defaultdict
 from itertools import combinations
 
@@ -150,16 +151,41 @@ def _merge(name, material, parts):
     return {"name": name, "material": material, "verts": verts, "faces": faces, "uvs": uvs}
 
 
-def _terrain(samples, extent, cell):
+def load_ground(path):
+    """Regular x,y,h grid (data/elevation.csv) -> bilinear height(x, y), or None if there is no file."""
+    if not os.path.exists(path):
+        return None
+    with open(path, newline="", encoding="utf-8") as f:
+        rows = [(float(r["x"]), float(r["y"]), float(r["h"])) for r in csv.DictReader(line for line in f if not line.startswith("#"))]
+    xs, ys = sorted({r[0] for r in rows}), sorted({r[1] for r in rows})
+    cell = xs[1] - xs[0]
+    grid = {(round((x - xs[0]) / cell), round((y - ys[0]) / cell)): h for x, y, h in rows}
+
+    def height(x, y):
+        fx = min(max((x - xs[0]) / cell, 0), len(xs) - 1.0001)
+        fy = min(max((y - ys[0]) / cell, 0), len(ys) - 1.0001)
+        i, j, tx, ty = int(fx), int(fy), fx % 1, fy % 1
+        return ((grid[i, j] * (1 - tx) + grid[i + 1, j] * tx) * (1 - ty)
+                + (grid[i, j + 1] * (1 - tx) + grid[i + 1, j + 1] * tx) * ty)
+    return height
+
+
+def _terrain(samples, reach, extent, cell, ground):
+    """Grid at the track's height inside `reach` of the centreline, blending into the NMT ground beyond it.
+
+    ponytail: nearest-sample search is O(vertices x samples), ~2 s here; use a grid index if it grows.
+    """
     x0, y0, x1, y1 = extent
     nx, ny = int((x1 - x0) / cell) + 1, int((y1 - y0) / cell) + 1
     verts, uvs = [], []
     for j in range(ny + 1):
         for i in range(nx + 1):
             x, y = x0 + i * cell, y0 + j * cell
-            # inverse-distance-weighted height from the centreline samples
-            ws = [(1 / ((x - s[0]) ** 2 + (y - s[1]) ** 2 + 1e-6), s[2]) for s in samples]
-            z = sum(w * h for w, h in ws) / sum(w for w, _ in ws) - GROUND_SINK_M
+            d2, k = min(((x - s[0]) ** 2 + (y - s[1]) ** 2, k) for k, s in enumerate(samples))
+            z = samples[k][2] - GROUND_SINK_M
+            if ground:
+                t = min(max((math.sqrt(d2) - reach[k]) / 6.0, 0.0), 1.0)
+                z += t * (ground(x, y) - GROUND_SINK_M - z)
             verts.append((x, y, z))
             uvs.append((x / UV_M, y / UV_M))
     faces = [[j * (nx + 1) + i, j * (nx + 1) + i + 1, (j + 1) * (nx + 1) + i + 1, (j + 1) * (nx + 1) + i]
@@ -167,7 +193,7 @@ def _terrain(samples, extent, cell):
     return verts, faces, uvs
 
 
-def build(cfg, pts):
+def build(cfg, pts, ground=None):
     samples, length = resample(pts, cfg["sample_step_m"])
     n = len(samples)
     ds = length / n
@@ -176,6 +202,10 @@ def build(cfg, pts):
         samples = [list(p) for p in zip(*(_box(_box([s[c] for s in samples], r), r) for c in range(4)))]
         length = sum(math.dist(a[:3], b[:3]) for a, b in zip(samples, samples[1:] + samples[:1]))
         ds = length / n
+    r = round(cfg.get("z_smooth_m", 0) / 2 / ds)
+    if r:  # NMT is noisy by ~10 cm; the asphalt shouldn't be
+        for sm, z in zip(samples, _box(_box([sm[2] for sm in samples], r), r)):
+            sm[2] = z
     tang, left, curv = frames(samples, ds)
     caps = clearance(samples, left)
     r = max(1, round(5 / ds))
@@ -217,8 +247,9 @@ def build(cfg, pts):
     xs = [p[0] for line in wall_lines for p in line]
     ys = [p[1] for line in wall_lines for p in line]
     m = cfg["terrain_margin_m"]
-    objects.append(_merge("2GRASS", "ground", [_terrain(samples, (min(xs) - m, min(ys) - m, max(xs) + m, max(ys) + m),
-                                                        cfg["terrain_cell_m"])]))
+    reach = [max(wall_off[1][i], wall_off[-1][i]) + 1.0 for i in range(n)]
+    objects.append(_merge("2GRASS", "ground", [_terrain(samples, reach, (min(xs) - m, min(ys) - m, max(xs) + m, max(ys) + m),
+                                                        cfg["terrain_cell_m"], ground)]))
     objects = [o for o in objects if o["faces"]]
 
     return {
@@ -319,6 +350,10 @@ def validate(cfg, pts, geo):
         s += gap
 
     sm = geo["samples"]
+    k = max(1, round(5 / geo["ds"]))
+    grade = max(abs(sm[(i + k) % len(sm)][2] - sm[i][2]) / (k * geo["ds"]) for i in range(len(sm)))
+    if grade > cfg.get("max_grade", 0.08):
+        warnings.append(f"steepest 5 m of track: {grade:.1%} grade - check elevation data")
     worst = max(math.dist(a[:3], b[:3]) for a, b in zip(sm, sm[1:] + sm[:1]))
     if worst > 1.5 * geo["ds"]:
         errors.append(f"surface discontinuity: sample spacing {worst:.2f} m > 1.5 x {geo['ds']:.2f} m")
