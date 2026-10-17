@@ -1,0 +1,46 @@
+{
+  "_note": "Track parameters. Keys listed in 'placeholder' are NOT measured - temporary values to replace with real data.",
+  "name": "Kartodrom Gostyń",
+  "folder": "kartodrom_gostyn",
+  "city": "Gostyń",
+  "country": "Poland",
+  "year": 1989,
+  "url": "https://kartodrom-gostyn.pl/",
+  "origin_lat_lon": [51.876234, 17.018683],
+
+  "length_m": 800,
+  "length_tolerance": 0.05,
+  "width_min_m": 7.0,
+  "width_max_m": 10.0,
+  "turns": 15,
+
+  "default_width_m": 8.0,
+  "reverse": true,
+  "start_xy": [83.4, 18.3],
+  "kerb_width_m": 1.0,
+  "kerb_min_curvature": 0.04,
+  "runoff_m": 3.0,
+  "wall_height_m": 1.0,
+  "grid_slots": 6,
+  "grid_spacing_m": 5.0,
+  "pit_slots": 4,
+  "hotlap_back_m": 50.0,
+  "spawn_flip": false,
+
+  "sample_step_m": 1.0,
+  "smooth_m": 1.0,
+  "max_input_gap_m": 20.0,
+  "terrain_margin_m": 40.0,
+  "terrain_cell_m": 4.0,
+
+  "placeholder": [
+    "default_width_m", "start_xy (point along the straight)", "kerb_width_m", "kerb_min_curvature",
+    "runoff_m", "wall_height_m", "grid_slots", "grid_spacing_m", "pit_slots", "hotlap_back_m",
+    "elevation (z column empty -> 0)"
+  ],
+  "sources": [
+    "length 800 m, width 7-10 m, 15 turns: https://kartodrom-gostyn.pl/tor/ (2026-10-17)",
+    "centreline: OpenStreetMap ways 378990687 + 558923489, (c) OpenStreetMap contributors, ODbL",
+    "start/finish on the long east straight (83 m OSM gap), direction toward the parallel straight via the hairpin: local knowledge from the project author (2026-10-17)"
+  ]
+}
