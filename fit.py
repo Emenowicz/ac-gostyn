@@ -30,7 +30,8 @@ class Ortho:
         if not (0 <= px < self.w and 0 <= py < self.h):
             return None
         row = self.h - 1 - py if self.bottom_up else py
-        b, g, r = self.data[self.offset + row * self.stride + px * self.bpp:][:3]
+        i = self.offset + row * self.stride + px * self.bpp
+        b, g, r = self.data[i:i + 3]
         return r, g, b
 
     def classify(self, x, y):

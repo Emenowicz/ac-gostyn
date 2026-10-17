@@ -34,6 +34,7 @@ CACHE = os.path.join(BUILD, "cache")
 ORTHO_WMS = "https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/HighResolution"
 NMT = "https://services.gugik.gov.pl/nmt/?request=GetHByPointList&list="
 ELEVATION = os.path.join(ROOT, "data", "elevation.csv")
+FEATURES = os.path.join(ROOT, "data", "features.json")
 EARTH_R = 6371008.8
 
 # OSM ways A, B. A[0]->A[1] is a 27 m chord duplicating B's last 38 m arc, so the loop is A[1:] + B[1:]
@@ -226,7 +227,7 @@ def fit_centreline(cfg, force):
 
 def generate(cfg):
     _, pts = trackgen.load(TRACK_JSON, CENTERLINE)
-    geo = trackgen.build(cfg, pts, trackgen.load_ground(ELEVATION))
+    geo = trackgen.build(cfg, pts, trackgen.load_ground(ELEVATION), trackgen.load_features(FEATURES))
     errors, warnings = trackgen.validate(cfg, pts, geo)
     for w in warnings:
         print("WARN ", w)
@@ -254,17 +255,17 @@ def write_preview(geo, path):
             for f in o["faces"]:
                 pts = " ".join(f"{o['verts'][i][0]:.1f},{-o['verts'][i][1]:.1f}" for i in f)
                 polys.append(f'<polygon points="{pts}" fill="{colors[o["material"]]}"/>')
-    for p in ("wall_l", "wall_r"):
-        line = " ".join(f"{x:.1f},{-y:.1f}" for x, y, _ in geo["polylines"][p])
-        polys.append(f'<polyline points="{line}" fill="none" stroke="#000" stroke-width="0.4"/>')
+    for b in geo["barriers"].values():
+        line = " ".join(f"{p[0]:.1f},{-p[1]:.1f}" for p in b)
+        polys.append(f'<polyline points="{line}" fill="none" stroke="#000" stroke-width="0.6"/>')
     for e in geo["empties"]:
         x, y, _ = e["pos"]
         color = "#00f" if e["name"].startswith("AC_TIME") else "#fc0"
         polys.append(f'<circle cx="{x:.1f}" cy="{-y:.1f}" r="0.8" fill="{color}"><title>{e["name"]}</title></circle>')
         polys.append(f'<line x1="{x:.1f}" y1="{-y:.1f}" x2="{x + 3 * e["fwd"][0]:.1f}" y2="{-y - 3 * e["fwd"][1]:.1f}" '
                      f'stroke="{color}" stroke-width="0.4"/>')
-    xs = [p[0] for p in geo["polylines"]["wall_l"] + geo["polylines"]["wall_r"]]
-    ys = [-p[1] for p in geo["polylines"]["wall_l"] + geo["polylines"]["wall_r"]]
+    xs = [p[0] for p in geo["polylines"]["edge_l"] + geo["polylines"]["edge_r"]]
+    ys = [-p[1] for p in geo["polylines"]["edge_l"] + geo["polylines"]["edge_r"]]
     w, h = max(xs) - min(xs) + 10, max(ys) - min(ys) + 10
     with open(path, "w") as f:
         f.write(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{min(xs) - 5:.0f} {min(ys) - 5:.0f} {w:.0f} {h:.0f}" '
@@ -283,7 +284,12 @@ def write_ortho_overlay(geo, pts, path):
         return f'<polyline points="{p}" fill="none" stroke="{color}" stroke-width="{width}"/>'
 
     el = [line(geo["polylines"][key] , "#ff0") for key in ("road_l", "road_r")]
-    el += [line(geo["polylines"][key], "#f0f", 1.5) for key in ("wall_l", "wall_r")]
+    el += [line(geo["polylines"][key], "#f0f", 1.5) for key in ("edge_l", "edge_r")]
+    el += [line(b, "#0ff", 3) for b in geo["barriers"].values()]
+    for o in geo["objects"]:
+        if o["name"] in ("1KERB", "2ROAD"):
+            color = "#f80" if o["name"] == "1KERB" else "#ff0"
+            el += [line([o["verts"][i] for i in f + f[:1]], color, 1.5) for f in o["faces"]]
     el += [f'<circle cx="{(x - m["x0"]) * k:.0f}" cy="{(m["y1"] - y) * k:.0f}" r="3" fill="#0ff"/>' for x, y, *_ in pts]
     for e in geo["empties"]:
         x, y, _ = e["pos"]

@@ -16,17 +16,25 @@ assert not errors, errors
 assert abs(geo["length"] - 2 * math.pi * R) / (2 * math.pi * R) < 0.005, geo["length"]
 assert all(s[3] == 8.0 for s in geo["samples"])
 
-# CCW circle: left = inside. Inner wall must stay between the road and the centre, outer wall beyond the road.
-assert all(4.0 < R - math.hypot(*p[:2]) < R for p in geo["polylines"]["wall_l"])
-assert all(math.hypot(*p[:2]) > R + 4.0 for p in geo["polylines"]["wall_r"])
+# CCW circle: left = inside. Without traced barriers, the inner wall stays between the road and the centre
+# (run-off capped by the free space), the outer wall beyond the road.
+assert all(4.0 < R - math.hypot(*p[:2]) < R for p in geo["barriers"]["auto_l"])
+assert all(math.hypot(*p[:2]) > R + 4.0 for p in geo["barriers"]["auto_r"])
 
-# walls face the track: inner wall normals point outward (away from centre), outer wall normals inward
-wall = next(o for o in geo["objects"] if o["name"] == "1WALL")
-for f in wall["faces"]:
-    nx, ny, _ = trackgen._normal(wall["verts"], f)
-    cx, cy = (sum(wall["verts"][i][k] for i in f) / 4 for k in (0, 1))
-    toward_centre = -(nx * cx + ny * cy)
-    assert (toward_centre < 0) == (math.hypot(cx, cy) < R), f
+# traced features: kerb only where a kerb strip is drawn, timing gates on the painted line, barrier on the road = error
+feats = {"start_finish": [[R - 5, 0.0], [R + 5, 0.0]],
+         "kerbs": [{"name": "k", "points": [[0.0, R - 4.5], [-10.0, R - 5.5]]}],
+         "barriers": [{"name": "b", "points": [[-R - 10, 0.0], [-R - 15, 0.0]]}],
+         "extra_asphalt": [{"name": "a", "points": [[R + 6, -2.0], [R + 9, -2.0], [R + 9, 2.0], [R + 6, 2.0]]}]}
+g2 = trackgen.build(cfg, pts, None, feats)
+assert not trackgen.validate(cfg, pts, g2)[0]
+kerb = next(o for o in g2["objects"] if o["name"] == "1KERB")
+assert 0 < len(kerb["faces"]) < 20 and all(v[1] > R - 10 for v in kerb["verts"]), len(kerb["faces"])
+gates = {e["name"]: e["pos"] for e in g2["empties"] if e["name"].startswith("AC_TIME")}
+assert abs(gates["AC_TIME_0_L"][0] - (R - 5.5)) < 0.01 and abs(gates["AC_TIME_0_R"][0] - (R + 5.5)) < 0.01, gates
+assert any(o["name"] == "2ROAD" for o in g2["objects"])
+feats["barriers"].append({"name": "on_road", "points": [[R - 10, 1.0], [R + 10, 1.0]]})
+assert any("crosses on_road" in e for e in trackgen.validate(cfg, pts, trackgen.build(cfg, pts, None, feats))[0])
 
 # spawns sit on the centreline ring and point along it
 for e in geo["empties"]:

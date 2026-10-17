@@ -170,30 +170,75 @@ def load_ground(path):
     return height
 
 
-def _terrain(samples, reach, extent, cell, ground):
-    """Grid at the track's height inside `reach` of the centreline, blending into the NMT ground beyond it.
+def _ground_fn(samples, reach, ground):
+    """Height of the ground at (x, y): track height inside `reach` of the centreline, blending into NMT beyond it.
 
-    ponytail: nearest-sample search is O(vertices x samples), ~2 s here; use a grid index if it grows.
+    ponytail: nearest-sample search is O(samples) per call, ~2 s for the whole terrain; use a grid index if it grows.
     """
+    def z_at(x, y):
+        d2, k = min(((x - s[0]) ** 2 + (y - s[1]) ** 2, k) for k, s in enumerate(samples))
+        z = samples[k][2] - GROUND_SINK_M
+        if ground:
+            t = min(max((math.sqrt(d2) - reach[k]) / 6.0, 0.0), 1.0)
+            z += t * (ground(x, y) - GROUND_SINK_M - z)
+        return z
+    return z_at
+
+
+def _terrain(z_at, extent, cell):
     x0, y0, x1, y1 = extent
     nx, ny = int((x1 - x0) / cell) + 1, int((y1 - y0) / cell) + 1
-    verts, uvs = [], []
-    for j in range(ny + 1):
-        for i in range(nx + 1):
-            x, y = x0 + i * cell, y0 + j * cell
-            d2, k = min(((x - s[0]) ** 2 + (y - s[1]) ** 2, k) for k, s in enumerate(samples))
-            z = samples[k][2] - GROUND_SINK_M
-            if ground:
-                t = min(max((math.sqrt(d2) - reach[k]) / 6.0, 0.0), 1.0)
-                z += t * (ground(x, y) - GROUND_SINK_M - z)
-            verts.append((x, y, z))
-            uvs.append((x / UV_M, y / UV_M))
+    verts = [(x0 + i * cell, y0 + j * cell, z_at(x0 + i * cell, y0 + j * cell)) for j in range(ny + 1) for i in range(nx + 1)]
     faces = [[j * (nx + 1) + i, j * (nx + 1) + i + 1, (j + 1) * (nx + 1) + i + 1, (j + 1) * (nx + 1) + i]
              for j in range(ny) for i in range(nx)]
-    return verts, faces, uvs
+    return verts, faces, [(v[0] / UV_M, v[1] / UV_M) for v in verts]
 
 
-def build(cfg, pts, ground=None):
+def _barrier(points, z_at, height, thick):
+    """Tyre wall along a polyline: two vertical sides + top, `thick` wide, standing on the ground."""
+    m = len(points)
+    closed = m > 2 and math.dist(points[0], points[-1]) < 1e-6
+    rows = {}
+    for side in (1, -1):
+        for top in (False, True):
+            rows[side, top] = []
+    s = 0.0
+    for i, (x, y) in enumerate(points):
+        a = points[i - 1] if i > 0 else (points[-2] if closed else points[0])
+        b = points[i + 1] if i < m - 1 else (points[1] if closed else points[-1])
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        d = math.hypot(dx, dy) or 1.0
+        nx, ny = -dy / d, dx / d
+        if i:
+            s += math.dist(points[i - 1], (x, y))
+        zb = z_at(x, y)
+        for side in (1, -1):
+            px, py = x + side * thick / 2 * nx, y + side * thick / 2 * ny
+            rows[side, False].append(((px, py, zb - 0.1), (s / UV_M, 0.0)))
+            rows[side, True].append(((px, py, zb + height), (s / UV_M, height / UV_M)))
+    every = [True] * (m - 1)
+    return [_strip(rows[1, False], rows[1, True], every, True), _strip(rows[-1, False], rows[-1, True], every, False),
+            _strip(rows[-1, True], rows[1, True], every, False)]
+
+
+def _dist_to_polyline(p, line):
+    best = math.inf
+    for a, b in zip(line, line[1:]):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        t = max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy or 1.0)))
+        best = min(best, math.hypot(a[0] + t * dx - p[0], a[1] + t * dy - p[1]))
+    return best
+
+
+def load_features(path):
+    """data/features.json (traced barriers, kerbs, start line, extra asphalt), or None if there is no file."""
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def build(cfg, pts, ground=None, features=None):
     samples, length = resample(pts, cfg["sample_step_m"])
     n = len(samples)
     ds = length / n
@@ -217,57 +262,80 @@ def build(cfg, pts, ground=None):
         kerb_out[side] = [max(h + 0.1, min(h + cfg["kerb_width_m"], c - 0.2)) for h, c in zip(half, caps[side])]
         wall_off[side] = [max(ko + 0.1, min(h + cfg["kerb_width_m"] + cfg["runoff_m"], 0.95 * c))
                           for h, ko, c in zip(half, kerb_out[side], caps[side])]
-    kerb = {side: [side * k > cfg["kerb_min_curvature"] for k in curv] for side in (1, -1)}  # inside of corners
+    if features:  # kerbs where the asphalt edge runs along a traced kerb strip
+        lines = [k["points"] for k in features.get("kerbs", [])]
+        kerb = {side: [any(_dist_to_polyline((sm[0] + side * h * l[0], sm[1] + side * h * l[1]), line) < cfg["kerb_snap_m"]
+                           for line in lines) for sm, h, l in zip(samples, half, left)] for side in (1, -1)}
+    else:  # fallback: inside of corners
+        kerb = {side: [side * k > cfg["kerb_min_curvature"] for k in curv] for side in (1, -1)}
 
-    def rows(offs, dz=0.0, wall=False):
+    def rows(offs, dz=0.0):
         out = []
         for k in range(n + 1):  # row n duplicates row 0 at s=length, so UVs don't wrap at the seam
             i = k % n
             x, y, z = samples[i][0] + offs[i] * left[i][0], samples[i][1] + offs[i] * left[i][1], samples[i][2] + dz
-            s = k * ds
-            out.append(((x, y, z), (s / UV_M, dz / UV_M) if wall else (offs[i] / UV_M, s / UV_M)))
+            out.append(((x, y, z), (offs[i] / UV_M, k * ds / UV_M)))
         return out
 
     every = [True] * n
     road_l, road_r = rows(half), rows([-h for h in half])
     objects = [_merge("1ROAD", "road", [_strip(road_r, road_l, every, False)])]
-    kerbs, grass, walls = [], [], []
+    kerbs, grass, outer = [], [], {}
     for side in (1, -1):
         edge = road_l if side == 1 else road_r
         ko = rows([side * o for o in kerb_out[side]])
-        wo = [side * o for o in wall_off[side]]
+        outer[side] = rows([side * o for o in wall_off[side]], -GROUND_SINK_M)  # run-off slopes down to the terrain
         flip = side < 0
         kerbs.append(_strip(edge, ko, kerb[side], flip))
         grass.append(_strip(edge, ko, [not m for m in kerb[side]], flip))
-        grass.append(_strip(ko, rows(wo), every, flip))
-        walls.append(_strip(rows(wo, wall=True), rows(wo, cfg["wall_height_m"], wall=True), every, flip))
-    objects += [_merge("1KERB", "kerb", kerbs), _merge("1GRASS", "grass", grass), _merge("1WALL", "wall", walls)]
+        grass.append(_strip(ko, outer[side], every, flip))
+    objects += [_merge("1KERB", "kerb", kerbs), _merge("1GRASS", "grass", grass)]
 
-    wall_lines = [[p for p, _ in rows([side * o for o in wall_off[side]])] for side in (1, -1)]
-    xs = [p[0] for line in wall_lines for p in line]
-    ys = [p[1] for line in wall_lines for p in line]
-    m = cfg["terrain_margin_m"]
     reach = [max(wall_off[1][i], wall_off[-1][i]) + 1.0 for i in range(n)]
-    objects.append(_merge("2GRASS", "ground", [_terrain(samples, reach, (min(xs) - m, min(ys) - m, max(xs) + m, max(ys) + m),
-                                                        cfg["terrain_cell_m"], ground)]))
+    z_at = _ground_fn(samples, reach, ground)
+    edge_lines = {side: [p for p, _ in outer[side]] for side in (1, -1)}
+    if features:
+        barriers = {b["name"]: [tuple(p) for p in b["points"]] for b in features.get("barriers", [])}
+    else:  # no traced barriers: a wall along the outer edge of the run-off on both sides
+        barriers = {f"auto_{'l' if side == 1 else 'r'}": [p[:2] for p in edge_lines[side]] for side in (1, -1)}
+    pts_all = [p[:2] for line in list(edge_lines.values()) + list(barriers.values()) for p in line]
+    m = cfg["terrain_margin_m"]
+    extent = (min(p[0] for p in pts_all) - m, min(p[1] for p in pts_all) - m,
+              max(p[0] for p in pts_all) + m, max(p[1] for p in pts_all) + m)
+    walls = [part for line in barriers.values() for part in _barrier(line, z_at, cfg["wall_height_m"], cfg["wall_thickness_m"])]
+    x0, y0, x1, y1 = (v + d for v, d in zip(extent, (1, 1, -1, -1)))  # perimeter, so nobody drives off the world
+    walls += _barrier([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], z_at, 2.0, 0.5)
+    objects.append(_merge("1WALL", "wall", walls))
+    if features and features.get("extra_asphalt"):
+        parts = []
+        for poly in features["extra_asphalt"]:  # convex polygons, fanned; just under the main asphalt where they overlap
+            pts2 = poly["points"]
+            if sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts2, pts2[1:] + pts2[:1])) < 0:
+                pts2 = pts2[::-1]  # counter-clockwise -> faces point up
+            v = [(x, y, z_at(x, y) + GROUND_SINK_M - 0.02) for x, y in pts2]
+            parts.append((v, [[0, k, k + 1] for k in range(1, len(v) - 1)], [(x / UV_M, y / UV_M) for x, y, _ in v]))
+        objects.append(_merge("2ROAD", "road", parts))
+    objects.append(_merge("2GRASS", "ground", [_terrain(z_at, extent, cfg["terrain_cell_m"])]))
     objects = [o for o in objects if o["faces"]]
 
     return {
         "samples": samples, "length": length, "ds": ds, "curvature": curv,
-        "objects": objects, "empties": _empties(cfg, samples, tang, left, length, ds),
+        "objects": objects, "empties": _empties(cfg, samples, tang, left, ds, features),
         "polylines": {"road_l": [p for p, _ in road_l], "road_r": [p for p, _ in road_r],
-                      "wall_l": wall_lines[0], "wall_r": wall_lines[1]},
+                      "edge_l": edge_lines[1], "edge_r": edge_lines[-1]},
+        "barriers": barriers,
         "corners": sum(1 for i in range(n) if (abs(curv[i]) > cfg["kerb_min_curvature"])
                        and not abs(curv[i - 1]) > cfg["kerb_min_curvature"]),
     }
 
 
-def _empties(cfg, samples, tang, left, length, ds):
+def _empties(cfg, samples, tang, left, ds, features):
     n = len(samples)
     flip = -1 if cfg.get("spawn_flip") else 1
-
-    # start line = centreline sample nearest to start_xy, so editing the centreline doesn't move it
-    i0 = min(range(n), key=lambda i: math.dist(samples[i][:2], cfg["start_xy"]))
+    line = features.get("start_finish") if features else None
+    # start line = centreline sample nearest to it, so editing the centreline doesn't move it
+    sx, sy = ((line[0][0] + line[1][0]) / 2, (line[0][1] + line[1][1]) / 2) if line else cfg["start_xy"]
+    i0 = min(range(n), key=lambda i: math.dist(samples[i][:2], (sx, sy)))
 
     def at(back, lateral, name):
         i = (i0 - round(back / ds)) % n
@@ -279,6 +347,13 @@ def _empties(cfg, samples, tang, left, length, ds):
     sp = cfg["grid_spacing_m"]
     out = [at(0, half + 0.5, "AC_TIME_0_L"), at(0, -half - 0.5, "AC_TIME_0_R"),
            at(cfg["hotlap_back_m"], 0, "AC_HOTLAP_START_0")]
+    if line:  # timing gates on the painted line, 0.5 m beyond each end
+        z, (lx, ly) = samples[i0][2], left[i0]
+        for e in out[:2]:
+            p = max(line, key=lambda q: (q[0] - sx) * lx * (1 if e["name"].endswith("L") else -1)
+                    + (q[1] - sy) * ly * (1 if e["name"].endswith("L") else -1))
+            d = math.dist(p, (sx, sy)) or 1.0
+            e["pos"] = (p[0] + (p[0] - sx) / d * 0.5, p[1] + (p[1] - sy) / d * 0.5, z)
     out += [at(3 + (k // 2) * sp + (k % 2) * sp / 2, (half / 2) * (1 if k % 2 == 0 else -1), f"AC_START_{k}")
             for k in range(cfg["grid_slots"])]
     grid_end = 3 + ((cfg["grid_slots"] + 1) // 2 + 1) * sp
@@ -358,23 +433,25 @@ def validate(cfg, pts, geo):
     if worst > 1.5 * geo["ds"]:
         errors.append(f"surface discontinuity: sample spacing {worst:.2f} m > 1.5 x {geo['ds']:.2f} m")
 
-    hits = _crossings(list(geo["polylines"].values()))
-    names = list(geo["polylines"])
-    for (a, _, pa, _), (_, _, pb, _) in hits[:5]:
-        errors.append(f"{names[pa]} crosses {names[pb]} near ({a[0]:.0f}, {a[1]:.0f})")
-    if len(hits) > 5:
-        errors.append(f"... {len(hits) - 5} more edge crossings")
+    for group in (geo["polylines"], {"road_l": geo["polylines"]["road_l"], "road_r": geo["polylines"]["road_r"],
+                                     **geo["barriers"]}):
+        names = list(group)
+        hits = _crossings(list(group.values()))
+        for (a, _, pa, _), (_, _, pb, _) in hits[:5]:
+            errors.append(f"{names[pa]} crosses {names[pb]} near ({a[0]:.0f}, {a[1]:.0f})")
+        if len(hits) > 5:
+            errors.append(f"... {len(hits) - 5} more crossings")
 
     for o in geo["objects"]:
         if len(o["verts"]) >= 65535:
             errors.append(f"{o['name']}: {len(o['verts'])} vertices, KN5 limit is 65534 per object - split it")
-        if o["name"] == "1ROAD" and len(o["faces"]) != len(sm):
+        if o["name"] == "1ROAD" and len(o["faces"]) != len(sm):  # one quad per sample = no holes
             errors.append(f"1ROAD has {len(o['faces'])} quads for {len(sm)} samples - asphalt has holes")
         wall = o["material"] == "wall"
         for f in o["faces"]:
             nx, ny, nz = _normal(o["verts"], f)
             area = math.sqrt(nx * nx + ny * ny + nz * nz)
-            if area < 1e-9 or (abs(nz) > 0.01 * area if wall else nz <= 0):
+            if area < 1e-9 or (nz < -0.01 * area if wall else nz <= 0):
                 errors.append(f"{o['name']}: degenerate or flipped face {f}")
                 break
 
