@@ -2,6 +2,7 @@
 # starting from OpenStreetMap ways 378990687 + 558923489, (c) OpenStreetMap contributors, ODbL.
 # x east / y north [m] around origin_lat_lon from track.json; width = asphalt edge to edge [m].
 # z = terrain height from GUGiK NMT (m a.s.l., PL-EVRF2007-NH), fetched by `build.py fetch-elevation`.
+# z = terrain height from GUGiK NMT (m a.s.l., PL-EVRF2007-NH), fetched by `build.py fetch-elevation`.
 x,y,z,width
 -45.36,-45.35,90.70,7.00
 -46.57,-43.72,90.70,7.50

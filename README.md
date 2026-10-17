@@ -26,7 +26,7 @@ Wynik w `build/`:
 ```
 build/preview.svg                         podgląd z góry (asfalt, krawężniki, bandy, spawny)
 build/ortho_overlay.svg                   model na ortofotomapie – główne narzędzie do sprawdzania danych
-build/fbx/kartodrom_gostyn.fbx            + texture/*.png  -> do ksEditor
+build/fbx/kartodrom_gostyn.fbx            + texture/*.png  -> do ksEditor (ortho.png = ortofotomapa na terenie i poboczu, 4096²)
 build/fbx/kartodrom_gostyn.blend          do podglądu w Blenderze
 build/content/tracks/kartodrom_gostyn/    models.ini, data/surfaces.ini, ui/ui_track.json
 ```
@@ -86,7 +86,7 @@ Obiekty fizyczne: `1ROAD`, `2ROAD` (dodatkowy asfalt), `1KERB`, `1GRASS`, `1WALL
 `AC_HOTLAP_START_0`, `AC_TIME_0_L/R` (oś Z = kierunek jazdy, Y = góra).
 
 ## Poza MVP
-Ortofotomapa jako tekstura terenu (następny krok), linia AI (`ai/fast_lane.ai`, nagrywana w grze),
+Linia AI (`ai/fast_lane.ai`, nagrywana w grze),
 `map.png`/`ui/preview.png`/`outline.png`, kamery, boksy na parkingu, prawdziwe tekstury, otoczenie (budynki, drzewa).
 
 Źródła: ortofotomapa i NMT © GUGiK (Geoportal.gov.pl), oś początkowa © OpenStreetMap contributors (ODbL).

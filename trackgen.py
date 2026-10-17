@@ -238,7 +238,7 @@ def load_features(path):
         return json.load(f)
 
 
-def build(cfg, pts, ground=None, features=None):
+def build(cfg, pts, ground=None, features=None, photo=None):
     samples, length = resample(pts, cfg["sample_step_m"])
     n = len(samples)
     ds = length / n
@@ -303,8 +303,9 @@ def build(cfg, pts, ground=None, features=None):
         barriers = {f"auto_{'l' if side == 1 else 'r'}": [p[:2] for p in edge_lines[side]] for side in (1, -1)}
     pts_all = [p[:2] for line in list(edge_lines.values()) + list(barriers.values()) for p in line]
     m = cfg["terrain_margin_m"]
-    extent = (min(p[0] for p in pts_all) - m, min(p[1] for p in pts_all) - m,
-              max(p[0] for p in pts_all) + m, max(p[1] for p in pts_all) + m)
+    extent = ((photo["x0"], photo["y0"], photo["x1"], photo["y1"]) if photo else
+              (min(p[0] for p in pts_all) - m, min(p[1] for p in pts_all) - m,
+               max(p[0] for p in pts_all) + m, max(p[1] for p in pts_all) + m))
     walls = [part for line in barriers.values() for part in _barrier(line, z_at, cfg["wall_height_m"], cfg["wall_thickness_m"])]
     x0, y0, x1, y1 = (v + d for v, d in zip(extent, (1, 1, -1, -1)))  # perimeter, so nobody drives off the world
     objects.append(_merge("1WALL", "wall", walls))
@@ -320,6 +321,12 @@ def build(cfg, pts, ground=None, features=None):
         objects.append(_merge("2ROAD", "road", parts))
     objects.append(_merge("2GRASS", "ground", [_terrain(z_at, extent, cfg["terrain_cell_m"])]))
     objects = [o for o in objects if o["faces"]]
+    if photo:  # orthophoto draped over the terrain and the run-off grass: planar UVs over the photo's extent
+        x0, y0, x1, y1 = extent
+        for o in objects:
+            if o["name"] in ("1GRASS", "2GRASS"):
+                o["material"] = "ortho"
+                o["uvs"] = [((v[0] - x0) / (x1 - x0), (v[1] - y0) / (y1 - y0)) for v in o["verts"]]
 
     return {
         "samples": samples, "length": length, "ds": ds, "curvature": curv,

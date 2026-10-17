@@ -148,9 +148,11 @@ def fetch(url, timeout=120):
 
 def fetch_ortho(cfg):
     _, pts = trackgen.load(TRACK_JSON, CENTERLINE)
-    m, ppm = cfg["ortho_margin_m"], cfg["ortho_px_per_m"]
-    x0, x1 = math.floor(min(p[0] for p in pts) - m), math.ceil(max(p[0] for p in pts) + m)
-    y0, y1 = math.floor(min(p[1] for p in pts) - m), math.ceil(max(p[1] for p in pts) + m)
+    feats = trackgen.load_features(FEATURES) or {}
+    xy = [p[:2] for p in pts] + [q for k in ("barriers", "extra_asphalt") for b in feats.get(k, []) for q in b["points"]]
+    m, ppm = cfg["ortho_margin_m"], cfg["ortho_px_per_m"]  # the photo is also the terrain's extent and texture
+    x0, x1 = math.floor(min(p[0] for p in xy) - m), math.ceil(max(p[0] for p in xy) + m)
+    y0, y1 = math.floor(min(p[1] for p in xy) - m), math.ceil(max(p[1] for p in xy) + m)
     w, h = round((x1 - x0) * ppm), round((y1 - y0) * ppm)
     if max(w, h) > 4096:
         sys.exit(f"{w}x{h} px exceeds the WMS limit of 4096 - lower ortho_px_per_m or ortho_margin_m")
@@ -227,7 +229,11 @@ def fit_centreline(cfg, force):
 
 def generate(cfg):
     _, pts = trackgen.load(TRACK_JSON, CENTERLINE)
-    geo = trackgen.build(cfg, pts, trackgen.load_ground(ELEVATION), trackgen.load_features(FEATURES))
+    photo = None
+    if os.path.exists(os.path.join(CACHE, "ortho.json")):
+        with open(os.path.join(CACHE, "ortho.json")) as f:
+            photo = json.load(f)
+    geo = trackgen.build(cfg, pts, trackgen.load_ground(ELEVATION), trackgen.load_features(FEATURES), photo)
     errors, warnings = trackgen.validate(cfg, pts, geo)
     for w in warnings:
         print("WARN ", w)
@@ -235,7 +241,8 @@ def generate(cfg):
         print("ERROR", e)
     os.makedirs(BUILD, exist_ok=True)
     with open(os.path.join(BUILD, "mesh.json"), "w") as f:
-        json.dump({"objects": geo["objects"], "empties": geo["empties"]}, f)
+        json.dump({"objects": geo["objects"], "empties": geo["empties"],
+                   "photo": os.path.join(CACHE, "ortho.bmp") if photo else None}, f)
     write_preview(geo, os.path.join(BUILD, "preview.svg"))
     if os.path.exists(os.path.join(CACHE, "ortho.json")):
         write_ortho_overlay(geo, pts, os.path.join(BUILD, "ortho_overlay.svg"))

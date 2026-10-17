@@ -25,13 +25,21 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
 texdir = os.path.join(os.path.dirname(os.path.abspath(out)), "texture")
 os.makedirs(texdir, exist_ok=True)
+for stale in os.listdir(texdir):  # only this build's textures should sit next to the FBX
+    os.remove(os.path.join(texdir, stale))
 materials = {}
 
 
 def material(name):
     if name not in materials:
-        img = bpy.data.images.new(name, 16, 16)
-        if name in STRIPES:
+        if name == "ortho":  # GUGiK orthophoto, resampled to a power-of-two texture
+            img = bpy.data.images.load(data["photo"])
+            img.scale(4096, 4096)
+        else:
+            img = bpy.data.images.new(name, 16, 16)
+        if name == "ortho":
+            pass
+        elif name in STRIPES:
             count, axis = STRIPES[name]
             img.pixels = [c for y in range(16) for x in range(16)
                           for c in (*(RED if ((x, y)[axis] * count // 16) % 2 == 0 else YELLOW), 1.0)]
