@@ -366,8 +366,8 @@ def _empties(cfg, samples, tang, left, ds, features):
             e["pos"] = (p[0] + (p[0] - sx) / d * 0.5, p[1] + (p[1] - sy) / d * 0.5, z)
     out += [at(3 + (k // 2) * sp + (k % 2) * sp / 2, (half / 2) * (1 if k % 2 == 0 else -1), f"AC_START_{k}")
             for k in range(cfg["grid_slots"])]
-    grid_end = 3 + ((cfg["grid_slots"] + 1) // 2 + 1) * sp
-    out += [at(grid_end + k * sp, 0, f"AC_PIT_{k}") for k in range(cfg["pit_slots"])]
+    # pit boxes share the grid slots: the paddock isn't modelled, and AC uses pits (practice) and grid (race) separately
+    out += [dict(e, name=f"AC_PIT_{k}") for k, e in enumerate(out[3:3 + cfg["pit_slots"]])]
     return out
 
 
