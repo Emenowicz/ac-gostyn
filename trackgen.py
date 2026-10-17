@@ -304,8 +304,8 @@ def build(cfg, pts, ground=None, features=None):
               max(p[0] for p in pts_all) + m, max(p[1] for p in pts_all) + m)
     walls = [part for line in barriers.values() for part in _barrier(line, z_at, cfg["wall_height_m"], cfg["wall_thickness_m"])]
     x0, y0, x1, y1 = (v + d for v, d in zip(extent, (1, 1, -1, -1)))  # perimeter, so nobody drives off the world
-    walls += _barrier([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], z_at, 2.0, 0.5)
     objects.append(_merge("1WALL", "wall", walls))
+    objects.append(_merge("2WALL", "concrete", _barrier([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], z_at, 2.0, 0.5)))
     if features and features.get("extra_asphalt"):
         parts = []
         for poly in features["extra_asphalt"]:  # convex polygons, fanned; just under the main asphalt where they overlap
@@ -447,7 +447,7 @@ def validate(cfg, pts, geo):
             errors.append(f"{o['name']}: {len(o['verts'])} vertices, KN5 limit is 65534 per object - split it")
         if o["name"] == "1ROAD" and len(o["faces"]) != len(sm):  # one quad per sample = no holes
             errors.append(f"1ROAD has {len(o['faces'])} quads for {len(sm)} samples - asphalt has holes")
-        wall = o["material"] == "wall"
+        wall = o["name"].endswith("WALL")
         for f in o["faces"]:
             nx, ny, nz = _normal(o["verts"], f)
             area = math.sqrt(nx * nx + ny * ny + nz * nz)

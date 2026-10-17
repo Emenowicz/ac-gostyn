@@ -14,9 +14,12 @@ with open(src) as f:
     data = json.load(f)
 
 COLORS = {  # ponytail: flat-colour textures for the MVP; swap the PNGs in build/fbx/texture for real ones
-    "road": (0.10, 0.10, 0.11), "kerb": (0.75, 0.08, 0.08), "grass": (0.18, 0.40, 0.12),
-    "wall": (0.85, 0.85, 0.85), "ground": (0.22, 0.36, 0.15),
+    "road": (0.10, 0.10, 0.11), "grass": (0.18, 0.40, 0.12), "concrete": (0.62, 0.61, 0.58), "ground": (0.22, 0.36, 0.15),
 }
+RED, YELLOW = (0.72, 0.07, 0.06), (0.93, 0.72, 0.08)
+# Two-colour stripes, from onboard footage: kerbs painted red/yellow in 0.5 m stripes (UV v = distance / 4 m),
+# tyre walls stacked in red and yellow blocks of ~2 m (UV u = length / 4 m). Texture tile = 4 m.
+STRIPES = {"kerb": (8, 1), "wall": (2, 0)}  # stripes per tile, axis (0 = u / image x, 1 = v / image y)
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
@@ -28,7 +31,12 @@ materials = {}
 def material(name):
     if name not in materials:
         img = bpy.data.images.new(name, 16, 16)
-        img.pixels = [*COLORS[name], 1.0] * (16 * 16)
+        if name in STRIPES:
+            count, axis = STRIPES[name]
+            img.pixels = [c for y in range(16) for x in range(16)
+                          for c in (*(RED if ((x, y)[axis] * count // 16) % 2 == 0 else YELLOW), 1.0)]
+        else:
+            img.pixels = [*COLORS[name], 1.0] * (16 * 16)
         img.filepath_raw = os.path.join(texdir, name + ".png")
         img.file_format = "PNG"
         img.save()

@@ -50,7 +50,9 @@ build/content/tracks/kartodrom_gostyn/    models.ini, data/surfaces.ini, ui/ui_t
 | wysokości | 90,3–91,2 m n.p.m. (tor), teren 87–94 m | NMT GUGiK |
 | kierunek jazdy | zgodnie z ruchem wskazówek zegara (`reverse: true`) | wiedza lokalna autora projektu |
 | start/meta, bandy, krawężniki, dodatkowy asfalt | `features.json` | odrysowane z ortofotomapy |
-| wysokość/grubość band, pola startowe, boksy, fizyka nawierzchni | `track.json`, `surfaces.ini` | **PLACEHOLDER** |
+| bandy: opony 0,6 m, czerwono-żółte; tarki: malowane czerwono-żółte | `track.json`, tekstury | szacunek ze zdjęć i nagrań onboard ([YouTube](https://www.youtube.com/@kartodromgostyn)) |
+| rekord toru | 50,434 s (gokarty z wypożyczalni, 2025) | [kartodrom-gostyn.pl/rekordy](https://kartodrom-gostyn.pl/rekordy/) – cel przy strojeniu fizyki |
+| pola startowe, boksy, fizyka nawierzchni | `track.json`, `surfaces.ini` | **PLACEHOLDER** |
 
 ## Walidacja
 Błąd (build przerwany): długość poza 800 m ±5%, szerokość poza 5–13 m, nieciągłość próbek, dziury w asfalcie,
@@ -65,7 +67,7 @@ schodzą do poziomu terenu. Teren przy torze ma wysokość toru, dalej przechodz
 ## Windows: FBX → KN5 → gra
 1. Skopiuj `build/fbx/` (FBX + `texture/`) i `build/content/` na PC.
 2. ksEditor → File → Import → `kartodrom_gostyn.fbx`.
-3. Materiały (`road`, `kerb`, `grass`, `wall`, `ground`): shader `ksPerPixel`, `txDiffuse` = plik z `texture/`.
+3. Materiały (`road`, `kerb`, `grass`, `wall`, `concrete`, `ground`): shader `ksPerPixel`, `txDiffuse` = plik z `texture/`.
 4. File → Save kn5 → Track → `content\tracks\kartodrom_gostyn\kartodrom_gostyn.kn5`.
 5. Skopiuj `content\tracks\kartodrom_gostyn` do folderu AC i uruchom Practice.
 
@@ -79,7 +81,8 @@ Znane niewiadome do sprawdzenia w grze:
 - fizyka nawierzchni w `surfaces.ini` – wartości wyjściowe do strojenia.
 
 ## Nazewnictwo (AC)
-Obiekty fizyczne: `1ROAD`, `2ROAD` (dodatkowy asfalt), `1KERB`, `1GRASS`, `1WALL`, `2GRASS` (teren). Empties: `AC_START_n`, `AC_PIT_n`,
+Obiekty fizyczne: `1ROAD`, `2ROAD` (dodatkowy asfalt), `1KERB`, `1GRASS`, `1WALL` (opony), `2WALL` (mur na brzegu terenu),
+`2GRASS` (teren). Empties: `AC_START_n`, `AC_PIT_n`,
 `AC_HOTLAP_START_0`, `AC_TIME_0_L/R` (oś Z = kierunek jazdy, Y = góra).
 
 ## Poza MVP

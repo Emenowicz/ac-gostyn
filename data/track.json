@@ -13,6 +13,7 @@
   "width_min_m": 7.0,
   "width_max_m": 10.0,
   "turns": 15,
+  "lap_record_s": 50.434,
 
   "default_width_m": 8.0,
   "reverse": true,
@@ -20,7 +21,7 @@
   "kerb_width_m": 1.0,
   "kerb_min_curvature": 0.04,
   "runoff_m": 1.0,
-  "wall_height_m": 0.8,
+  "wall_height_m": 0.6,
   "wall_thickness_m": 0.6,
   "kerb_snap_m": 1.5,
   "grid_slots": 6,
@@ -43,11 +44,13 @@
 
   "placeholder": [
     "start_xy (point along the straight)", "kerb_width_m", "kerb_min_curvature",
-    "runoff_m", "wall_height_m", "grid_slots", "grid_spacing_m", "pit_slots", "hotlap_back_m"
+    "runoff_m", "grid_slots", "grid_spacing_m", "pit_slots", "hotlap_back_m"
   ],
   "sources": [
     "length 800 m, width 7-10 m, 15 turns: https://kartodrom-gostyn.pl/tor/ (2026-10-17)",
     "centreline + width: fitted to GUGiK orthophoto (Geoportal.gov.pl) by build.py fit",
+    "lap record 50.434 s (rental karts, 2025): https://kartodrom-gostyn.pl/rekordy/ - target for physics tuning",
+    "tyre walls ~0.6 m (2-3 tyres, red/yellow), kerbs red/yellow painted: estimated from track photos + onboard videos (youtube.com/@kartodromgostyn)",
     "elevation: GUGiK NMT (services.gugik.gov.pl/nmt), m a.s.l.",
     "centreline start: OpenStreetMap ways 378990687 + 558923489, (c) OpenStreetMap contributors, ODbL",
     "start/finish on the long east straight (83 m OSM gap), direction toward the parallel straight via the hairpin: local knowledge from the project author (2026-10-17)"
