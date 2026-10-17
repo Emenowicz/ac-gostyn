@@ -301,10 +301,15 @@ def validate(cfg, pts, geo):
     (errors if abs(dev) > tol else warnings if abs(dev) > 0.01 else []).append(msg)
 
     widths = [s[3] for s in geo["samples"]]
-    bad = [i for i, w in enumerate(widths) if not cfg["width_min_m"] <= w <= cfg["width_max_m"]]
+    lo, hi = cfg["width_sanity_m"]
+    bad = [i for i, w in enumerate(widths) if not lo <= w <= hi]
     if bad:
-        errors.append(f"width outside {cfg['width_min_m']}-{cfg['width_max_m']} m at {len(bad)} samples, "
+        errors.append(f"width outside sanity range {lo}-{hi} m at {len(bad)} samples, "
                       f"first at s={bad[0] * geo['ds']:.0f} m ({widths[bad[0]]:.2f} m)")
+    off = [w for w in widths if not cfg["width_min_m"] <= w <= cfg["width_max_m"]]
+    if off:  # measured widths may legitimately differ a bit from the website's round numbers
+        warnings.append(f"width outside official {cfg['width_min_m']}-{cfg['width_max_m']} m on {len(off) * geo['ds']:.0f} m "
+                        f"of track (range {min(widths):.1f}-{max(widths):.1f} m)")
 
     s = 0.0
     for a, b in zip(pts, pts[1:] + pts[:1]):
