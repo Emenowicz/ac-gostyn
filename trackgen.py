@@ -334,6 +334,7 @@ def build(cfg, pts, ground=None, features=None, photo=None):
         "polylines": {"road_l": [p for p, _ in road_l], "road_r": [p for p, _ in road_r],
                       "edge_l": edge_lines[1], "edge_r": edge_lines[-1]},
         "barriers": barriers,
+        "on_kerb": {b["name"] for b in (features or {}).get("barriers", []) if b.get("on_kerb")},
         "corners": sum(1 for i in range(n) if (abs(curv[i]) > cfg["kerb_min_curvature"])
                        and not abs(curv[i - 1]) > cfg["kerb_min_curvature"]),
     }
@@ -466,6 +467,36 @@ def validate(cfg, pts, geo):
         if len(hits) > 5:
             errors.append(f"... {len(hits) - 5} more crossings")
 
+    # barrier footprint (centre line +- half thickness) vs asphalt and kerbs; tyres on a kerb can be real (apex markers)
+    quads = {o["name"]: [[o["verts"][i] for i in f] for f in o["faces"]] for o in geo["objects"] if o["name"] in ("1ROAD", "1KERB")}
+    ht = cfg["wall_thickness_m"] / 2
+
+    def inside(p, poly):
+        c = False
+        for (x1, y1, _), (x2, y2, _) in zip(poly, poly[1:] + poly[:1]):
+            if (y1 > p[1]) != (y2 > p[1]) and p[0] < (x2 - x1) * (p[1] - y1) / (y2 - y1) + x1:
+                c = not c
+        return c
+
+    for name, line in geo["barriers"].items():
+        if name.startswith("auto_"):
+            continue
+        on = set()
+        for a, b in zip(line, line[1:]):
+            steps = max(1, int(math.dist(a, b) / 0.25))
+            for k in range(steps + 1):
+                p = (a[0] + (b[0] - a[0]) * k / steps, a[1] + (b[1] - a[1]) * k / steps)
+                for surface, qs in quads.items():
+                    if surface not in on and any(
+                            min(v[0] for v in q) - ht <= p[0] <= max(v[0] for v in q) + ht
+                            and min(v[1] for v in q) - ht <= p[1] <= max(v[1] for v in q) + ht
+                            and any(inside((p[0] + dx, p[1] + dy), q) for dx, dy in ((0, 0), (ht, 0), (-ht, 0), (0, ht), (0, -ht)))
+                            for q in qs):
+                        on.add(surface)
+        if "1ROAD" in on:
+            errors.append(f"barrier {name} stands on the asphalt - move it in data/features.json")
+        elif "1KERB" in on and name not in geo.get("on_kerb", ()):
+            warnings.append(f"barrier {name} stands on a kerb - fine if the tyres really lie there (check the overlay)")
     for o in geo["objects"]:
         if len(o["verts"]) >= 65535:
             errors.append(f"{o['name']}: {len(o['verts'])} vertices, KN5 limit is 65534 per object - split it")
