@@ -51,6 +51,7 @@ build/content/tracks/kartodrom_gostyn/    models.ini, data/surfaces.ini, ui/ui_t
 | kierunek jazdy | zgodnie z ruchem wskazówek zegara (`reverse: true`) | wiedza lokalna autora projektu |
 | start/meta, bandy, krawężniki, dodatkowy asfalt | `features.json` | odrysowane z ortofotomapy |
 | bandy: opony 0,6 m, czerwono-żółte; tarki: malowane czerwono-żółte | `track.json`, tekstury | szacunek ze zdjęć i nagrań onboard ([YouTube](https://www.youtube.com/@kartodromgostyn)) |
+| weryfikacja tarek | zgodne ze zdjęciem z drona (wrzesień 2025); zewnętrzne krawężniki ze starego planu PZM już nie istnieją | zdjęcie od autora projektu, plan PZM |
 | rekord toru | 50,434 s (gokarty z wypożyczalni, 2025) | [kartodrom-gostyn.pl/rekordy](https://kartodrom-gostyn.pl/rekordy/) – cel przy strojeniu fizyki |
 | pola startowe, boksy, fizyka nawierzchni | `track.json`, `surfaces.ini` | **PLACEHOLDER** |
 

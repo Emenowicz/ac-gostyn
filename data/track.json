@@ -51,6 +51,7 @@
     "centreline + width: fitted to GUGiK orthophoto (Geoportal.gov.pl) by build.py fit",
     "lap record 50.434 s (rental karts, 2025): https://kartodrom-gostyn.pl/rekordy/ - target for physics tuning",
     "tyre walls ~0.6 m (2-3 tyres, red/yellow), kerbs red/yellow painted: estimated from track photos + onboard videos (youtube.com/@kartodromgostyn)",
+    "kerbs cross-checked on a drone photo from Sept 2025 (provided by the project author): all visible kerbs are modelled; outer kerbs from the old PZM track plan no longer exist",
     "elevation: GUGiK NMT (services.gugik.gov.pl/nmt), m a.s.l.",
     "centreline start: OpenStreetMap ways 378990687 + 558923489, (c) OpenStreetMap contributors, ODbL",
     "start/finish on the long east straight (83 m OSM gap), direction toward the parallel straight via the hairpin: local knowledge from the project author (2026-10-17)"
