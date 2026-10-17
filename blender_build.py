@@ -14,7 +14,7 @@ with open(src) as f:
     data = json.load(f)
 
 COLORS = {  # ponytail: flat-colour textures for the MVP; swap the PNGs in build/fbx/texture for real ones
-    "road": (0.40, 0.41, 0.41), "paint_white": (0.92, 0.92, 0.90), "paint_yellow": (0.95, 0.74, 0.10), "grass": (0.18, 0.40, 0.12), "concrete": (0.62, 0.61, 0.58), "ground": (0.22, 0.36, 0.15),
+    "road": (0.40, 0.41, 0.41), "paint_white": (0.92, 0.92, 0.90), "grass": (0.18, 0.40, 0.12), "concrete": (0.62, 0.61, 0.58), "ground": (0.22, 0.36, 0.15),
 }
 RED, YELLOW = (0.72, 0.07, 0.06), (0.93, 0.72, 0.08)
 # Two-colour stripes, from onboard footage: kerbs painted red/yellow in 0.5 m stripes (UV v = distance / 4 m),

@@ -26,7 +26,6 @@
   "kerb_snap_m": 1.5,
   "kerb_width_range_m": [0.6, 2.5],
   "line_width_m": 0.1,
-  "centre_dash_m": [1.0, 2.0],
   "grid_slots": 10,
   "grid_spacing_m": 5.0,
   "pit_slots": 10,
@@ -46,7 +45,7 @@
   "ortho_px_per_m": 12.0,
 
   "placeholder": [
-    "start_xy (point along the straight)", "kerb_width_m (default for kerbs without a measured width)", "kerb_min_curvature", "line_width_m", "centre_dash_m",
+    "start_xy (point along the straight)", "kerb_width_m (default for kerbs without a measured width)", "kerb_min_curvature", "line_width_m",
     "runoff_m", "grid_spacing_m (5 m per column, estimated)", "hotlap_back_m"
   ],
   "sources": [
@@ -58,7 +57,7 @@
     "kerbs cross-checked on a drone photo from Sept 2025 (provided by the project author): all visible kerbs are modelled; outer kerbs from the old PZM track plan no longer exist",
     "10 grid slots in two staggered columns: project author + PZM track plan; pit boxes placed on the grid slots",
     "kerb widths: measured on the orthophoto by build.py fit-kerbs (80th percentile per kerb), cross-checked on onboard videos",
-    "asphalt grey, white edge lines, yellow dashed centre line: onboard videos (youtube.com/watch?v=ZrJTsDWJeKA, JqjP0Bvsnjk)",
+    "asphalt grey, white edge lines: onboard videos (youtube.com/watch?v=ZrJTsDWJeKA, JqjP0Bvsnjk)",
     "elevation: GUGiK NMT (services.gugik.gov.pl/nmt), m a.s.l.",
     "centreline start: OpenStreetMap ways 378990687 + 558923489, (c) OpenStreetMap contributors, ODbL",
     "start/finish on the long east straight (83 m OSM gap), direction toward the parallel straight via the hairpin: local knowledge from the project author (2026-10-17)"

@@ -85,7 +85,6 @@ build/ortho_overlay.svg                   model na ortofotomapie – otwórz w p
    | `road` | `road.png` | asfalt, płyty dodatkowego asfaltu |
    | `kerb` | `kerb.png` | tarki (paski czerwono-żółte) |
    | `paint_white` | `paint_white.png` | białe linie krawędzi (obiekt `LINES_WHITE`, bez fizyki) |
-   | `paint_yellow` | `paint_yellow.png` | żółta przerywana linia środkowa (obiekt `LINES_YELLOW`, bez fizyki) |
    | `wall` | `wall.png` | bandy z opon |
    | `concrete` | `concrete.png` | mur na brzegu terenu |
    | `ortho` | `ortho.png` | teren i pobocze (ortofotomapa) |
@@ -156,7 +155,7 @@ data/*.csv, *.json ──> trackgen.py ──> build/mesh.json ──> blender_b
 - `blender_build.py` – uruchamiany w Blenderze: obiekty, tekstury, punkty AC, eksport FBX.
 
 Obiekty w AC (pierwsza cyfra + nazwa nawierzchni = fizyka): `1ROAD`, `2ROAD`, `1KERB`, `1GRASS`, `2GRASS` (teren),
-`1WALL` (opony), `2WALL` (mur). Bez fizyki: `LINES_WHITE`, `LINES_YELLOW`. Punkty: `AC_START_0..9`, `AC_PIT_0..9`, `AC_TIME_0_L/R`, `AC_HOTLAP_START_0`.
+`1WALL` (opony), `2WALL` (mur). Bez fizyki: `LINES_WHITE`. Punkty: `AC_START_0..9`, `AC_PIT_0..9`, `AC_TIME_0_L/R`, `AC_HOTLAP_START_0`.
 
 ## 8. Do zrobienia
 

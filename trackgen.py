@@ -296,10 +296,7 @@ def build(cfg, pts, ground=None, features=None, photo=None):
     lift, lw = 0.005, cfg["line_width_m"]
     edge_lines = [_strip(rows([side * (h - lw - 0.05) for h in half], lift), rows([side * (h - 0.05) for h in half], lift),
                          every, side < 0) for side in (1, -1)]
-    dash, gap = cfg["centre_dash_m"]
-    dashes = [(i * ds) % (dash + gap) < dash for i in range(n)]
     objects.append(_merge("LINES_WHITE", "paint_white", edge_lines))
-    objects.append(_merge("LINES_YELLOW", "paint_yellow", [_strip(rows([-lw / 2] * n, lift), rows([lw / 2] * n, lift), dashes, False)]))
     kerbs, grass, outer = [], [], {}
     for side in (1, -1):
         edge = road_l if side == 1 else road_r
