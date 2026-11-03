@@ -14,13 +14,14 @@ src, out = sys.argv[sys.argv.index("--") + 1:][:2]
 with open(src) as f:
     data = json.load(f)
 
-COLORS = {  # ponytail: flat-colour textures for the MVP; swap the PNGs in build/fbx/texture for real ones
-    "road": (0.40, 0.41, 0.41), "paint_white": (0.92, 0.92, 0.90), "grass": (0.18, 0.40, 0.12), "concrete": (0.62, 0.61, 0.58), "ground": (0.22, 0.36, 0.15),
-}
+# Road, concrete, kerbs and lines get procedural textures + normal maps (textures.py). What is left here is flat:
+COLORS = {"grass": (0.18, 0.40, 0.12), "ground": (0.22, 0.36, 0.15)}
+INVISIBLE = {"collider"}  # fully transparent (alpha 0): collision-only objects, shader ksPerPixelAT in ksEditor
 RED, YELLOW = (0.72, 0.07, 0.06), (0.93, 0.72, 0.08)
-# Two-colour stripes, from onboard footage: kerbs painted red/yellow in 0.5 m stripes (UV v = distance / 4 m),
-# tyre walls stacked in red and yellow blocks of ~2 m (UV u = length / 4 m). Texture tile = 4 m.
-STRIPES = {"kerb": (8, 1), "wall": (2, 0)}  # stripes per tile, axis (0 = u / image x, 1 = v / image y)
+STRIPES = {}  # stripes per tile, axis (0 = u / image x, 1 = v / image y)
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import textures  # noqa: E402  (numpy, bundled with Blender)
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
@@ -31,34 +32,65 @@ for stale in os.listdir(texdir):  # only this build's textures should sit next t
 materials = {}
 
 
+def save_image(name, rgb, colorspace="sRGB"):
+    """(h, w, 3) float array, row 0 = bottom -> texture/<name>.png"""
+    import numpy as np
+    h, w, _ = rgb.shape
+    img = bpy.data.images.new(name, w, h)
+    img.colorspace_settings.name = colorspace
+    img.pixels.foreach_set(np.dstack((rgb, np.ones((h, w)))).astype(np.float32).ravel())
+    img.filepath_raw = os.path.join(texdir, name + ".png")
+    img.file_format = "PNG"
+    img.save()
+    return img
+
+
 def material(name):
     if name not in materials:
-        if name == "ortho":  # GUGiK orthophoto, resampled to a power-of-two texture
-            img = bpy.data.images.load(data["photo"])
+        normal = None
+        if name in ("ortho", "ortho_near"):  # GUGiK orthophotos, resampled to a power-of-two texture
+            img = bpy.data.images.load(data["photo" if name == "ortho" else "photo_near"])
             img.scale(4096, 4096)
-        else:
-            img = bpy.data.images.new(name, 16, 16)
-        if name == "ortho":
-            pass
-        elif name == "kerb_apron":  # u across the kerb (0 = asphalt side): red band, then the white outer border
-            img.pixels = [c for y in range(16) for x in range(16) for c in (*(RED if x < 10 else COLORS["paint_white"]), 1.0)]
-        elif name in STRIPES:
-            count, axis = STRIPES[name]
-            img.pixels = [c for y in range(16) for x in range(16)
-                          for c in (*(RED if ((x, y)[axis] * count // 16) % 2 == 0 else YELLOW), 1.0)]
-        else:
-            img.pixels = [*COLORS[name], 1.0] * (16 * 16)
-        img.filepath_raw = os.path.join(texdir, name + ".png")
-        img.file_format = "PNG"
-        img.save()
+            img.filepath_raw = os.path.join(texdir, name + ".png")
+            img.file_format = "PNG"
+            img.save()
+        elif name in textures.SURFACES:  # procedural texture + normal map (shader ksPerPixelNM in ksEditor)
+            make, strength = textures.SURFACES[name]
+            albedo, height = make()
+            img = save_image(name, albedo)
+            normal = save_image(name + "_nm", textures.normal_map(height, strength), "Non-Color")
+        else:  # flat colours / stripes still waiting for a real texture
+            img = bpy.data.images.new(name, 16, 16, alpha=name in INVISIBLE)
+            if name in INVISIBLE:
+                img.pixels = [0.0, 0.0, 0.0, 0.0] * (16 * 16)
+            elif name in STRIPES:
+                count, axis = STRIPES[name]
+                img.pixels = [c for y in range(16) for x in range(16)
+                              for c in (*(RED if ((x, y)[axis] * count // 16) % 2 == 0 else YELLOW), 1.0)]
+            else:
+                img.pixels = [*COLORS[name], 1.0] * (16 * 16)
+            img.filepath_raw = os.path.join(texdir, name + ".png")
+            img.file_format = "PNG"
+            img.save()
         mat = bpy.data.materials.new(name)
         if not mat.node_tree:
             mat.use_nodes = True
-        nodes = mat.node_tree.nodes
+        nodes, links = mat.node_tree.nodes, mat.node_tree.links
         bsdf = next(n for n in nodes if n.type == "BSDF_PRINCIPLED")
         tex = nodes.new("ShaderNodeTexImage")
         tex.image = img
-        mat.node_tree.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        if name in INVISIBLE:  # invisible in the .blend preview too
+            links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+            if hasattr(mat, "surface_render_method"):
+                mat.surface_render_method = "DITHERED"
+            else:
+                mat.blend_method = "CLIP"
+        if normal:  # so the .blend preview shows the relief too
+            ntex, nmap = nodes.new("ShaderNodeTexImage"), nodes.new("ShaderNodeNormalMap")
+            ntex.image = normal
+            links.new(ntex.outputs["Color"], nmap.inputs["Color"])
+            links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
         materials[name] = mat
     return materials[name]
 

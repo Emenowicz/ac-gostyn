@@ -25,8 +25,12 @@ class Ortho:
 
     def rgb(self, x, y):
         m = self.meta
-        px = int((x - m["x0"]) * self.w / (m["x1"] - m["x0"]))
-        py = int((m["y1"] - y) * self.h / (m["y1"] - m["y0"]))
+        if "uv" in m:  # EPSG:2180 photo, turned against local north: affine local metres -> UV (v = 1 at the top)
+            (au, bu, cu), (av, bv, cv) = m["uv"]
+            px, py = int((au * x + bu * y + cu) * self.w), int((1 - (av * x + bv * y + cv)) * self.h)
+        else:  # axis-aligned with local x/y over x0..x1, y0..y1
+            px = int((x - m["x0"]) * self.w / (m["x1"] - m["x0"]))
+            py = int((m["y1"] - y) * self.h / (m["y1"] - m["y0"]))
         if not (0 <= px < self.w and 0 <= py < self.h):
             return None
         row = self.h - 1 - py if self.bottom_up else py

@@ -24,7 +24,7 @@ uruchamiany z wiersza poleceń eksportuje FBX, a ksEditor (narzędzie z AC) zami
 ```
 git clone https://github.com/Emenowicz/ac-gostyn.git
 cd ac-gostyn
-python3 build.py fetch-ortho     # jednorazowo: ortofotomapa (~33 MB) do tekstury terenu
+python3 build.py fetch-ortho     # jednorazowo: ortofotomapy (~80 MB, ok. 2,5 min) do tekstury terenu
 python3 build.py all             # walidacja + FBX + pliki moda -> build/
 ```
 Potem [konwersja w ksEditor](#4-konwersja-w-kseditor-tylko-windows) i [instalacja w AC](#5-pierwszy-przejazd-w-ac).
@@ -58,7 +58,7 @@ Bez `fetch-ortho` tor też się zbuduje, ale teren dostanie jednolity kolor zami
 Wynik w `build/`:
 ```
 build/fbx/kartodrom_gostyn.fbx            model dla ksEditor
-build/fbx/texture/*.png                   tekstury (ortho.png = ortofotomapa 4096², ok. 16 MB)
+build/fbx/texture/*.png                   tekstury (ortho.png / ortho_near.png = ortofotomapy 4096², po ok. 20 MB)
 build/fbx/kartodrom_gostyn.blend          ten sam model do obejrzenia w Blenderze
 build/content/tracks/kartodrom_gostyn/    folder moda: models.ini, data/surfaces.ini, ui/ui_track.json,
                                           ui/preview.png (widok z lotu ptaka, render Blendera), ui/outline.png (zarys)
@@ -79,17 +79,26 @@ build/ortho_overlay.svg                   model na ortofotomapie – otwórz w p
 
 1. Skopiuj na PC z Windowsem cały folder `build/fbx/` (FBX razem z `texture/`) oraz `build/content/`.
 2. Uruchom `ksEditor.exe` i zaimportuj `kartodrom_gostyn.fbx` (menu File).
-3. Dla każdego materiału ustaw shader `ksPerPixel` i jako `txDiffuse` wybierz plik o tej samej nazwie z `texture/`:
+3. Ustaw shader i tekstury każdego materiału (pliki z `texture/`). Materiały z mapą normalnych (`*_nm.png`,
+   generowaną razem z teksturą) dostają `ksPerPixelNM` z `txDiffuse` = `<nazwa>.png` i `txNormal` = `<nazwa>_nm.png`:
 
-   | Materiał | Tekstura | Gdzie |
-   |---|---|---|
-   | `road` | `road.png` | asfalt, płyty dodatkowego asfaltu |
-   | `kerb` | `kerb.png` | tarki (paski czerwono-żółte) |
-   | `kerb_apron` | `kerb_apron.png` | wylewki w stylu `apron` (czerwony beton z jasnym brzegiem, obiekt `1APRON`) |
-   | `paint_white` | `paint_white.png` | białe linie krawędzi (obiekt `LINES_WHITE`, bez fizyki) |
-   | `wall` | `wall.png` | bandy z opon |
-   | `concrete` | `concrete.png` | mur na brzegu terenu, szare betonowe wylewki przy torze (obiekt `2APRON`) |
-   | `ortho` | `ortho.png` | teren i pobocze (ortofotomapa) |
+   | Materiał | Shader | Tekstury | Gdzie |
+   |---|---|---|---|
+   | `road` | `ksPerPixelNM` | `road`, `road_nm` | asfalt, płyty dodatkowego asfaltu |
+   | `kerb` | `ksPerPixelNM` | `kerb`, `kerb_nm` | tarki (paski czerwono-żółte) |
+   | `kerb_apron` | `ksPerPixelNM` | `kerb_apron`, `kerb_apron_nm` | wylewki z czerwonego betonu (`1APRON`) |
+   | `kerb_concrete` | `ksPerPixelNM` | `kerb_concrete`, `kerb_concrete_nm` | szare betonowe wylewki (`2APRON`) |
+   | `concrete` | `ksPerPixelNM` | `concrete`, `concrete_nm` | mur na brzegu terenu (`2WALL`) |
+   | `tyre_red`, `tyre_yellow` | `ksPerPixelNM` | `tyre_red`, `tyre_red_nm` itd. | opony band (`TYRES_RED/YELLOW`, bez fizyki) |
+   | `paint_white` | `ksPerPixelNM` | `paint_white`, `paint_white_nm` | linie krawędzi i korytarzy (`LINES_WHITE`, `LINES_LANES`) |
+   | `paint_mint` | `ksPerPixelNM` | `paint_mint`, `paint_mint_nm` | pola startowe (`LINES_GRID`) |
+   | `chequer` | `ksPerPixelNM` | `chequer`, `chequer_nm` | linia startu i mety (`LINES_START`) |
+   | `ortho_near` | `ksPerPixel` | `ortho_near` | pobocze i teren w okolicy toru (ortofotomapa 5 cm, `1GRASS`, `2GRASS`) |
+   | `ortho` | `ksPerPixel` | `ortho` | dalszy teren (`3GRASS`) |
+   | `collider` | `ksPerPixelAT` | `collider` (w pełni przezroczysta) | kolizja band `1WALL`: niewidoczna, tylko fizyka |
+
+   Mapy normalnych są w konwencji OpenGL (zielony = +v). Gdyby faktura wyglądała jak wklęsła zamiast wypukłej,
+   odwróć kanał zielony (albo ustaw mnożnik normalnych na ujemny).
 
 4. Zapisz jako tor: File → Save kn5 → Track, pod nazwą `kartodrom_gostyn.kn5`, do folderu
    `content\tracks\kartodrom_gostyn\` (tego z `build/content/`).
@@ -127,7 +136,7 @@ w modelu. Po zmianie uruchom `python3 build.py validate` i obejrzyj `build/ortho
 | Plik | Zawartość |
 |---|---|
 | `data/centerline.csv` | oś toru `x,y,z,width` co 2 m; x – wschód, y – północ [m], z – m n.p.m.; pętla zamknięta niejawnie |
-| `data/features.json` | `start_finish` (linia startu), `barriers` (bandy z opon), `kerbs` (tarki), `extra_asphalt` (skróty, wjazdy) |
+| `data/features.json` | `start_finish` (linia startu), `grid` (środki namalowanych pól startowych), `painted_lines` (linie korytarzy), `barriers` (bandy z opon), `kerbs` (tarki), `extra_asphalt` (skróty, wjazdy) |
 | `data/elevation.csv` | siatka wysokości terenu co 4 m |
 | `data/track.json` | parametry; lista `placeholder` to wartości tymczasowe, `sources` to źródła danych |
 
@@ -137,12 +146,19 @@ na krawędzi asfaltu, a krawędź asfaltu to malowana biała linia. `"style"` ta
 `apron` (wylewka z czerwonego betonu z jasnym brzegiem), `concrete` (szara betonowa wylewka). Obie wylewki są
 podniesione o 3 cm jak tarka i mają własną nawierzchnię `APRON` ze słabszą wibracją niż `KERB`.
 Banda z `"on_kerb": true` może stać na tarce, a `"height"` nadpisuje jej wysokość (np. 0,25 m dla pojedynczej opony leżącej przy wierzchołku).
-Płyta z `extra_asphalt` może być dowolnym wielokątem bez samoprzecięć.
+Płyta z `extra_asphalt` może być dowolnym wielokątem bez samoprzecięć. Pola startowe `AC_START_*` stoją na punktach z `grid`
+(kolejno od linii mety); gdy `grid_slots` w `track.json` jest większe, kolejne pola przedłużają obie kolumny o zmierzony
+rozstaw rzędów. Bandy rysowane są jako słupki opon (`TYRES_*`, co 0,6 m, opony po ok. 0,2 m), a zderzenia liczy
+niewidoczna bryła `1WALL`.
 
 Ponowne pobranie danych źródłowych (zwykle niepotrzebne, wynik jest w repo):
 ```
 python3 build.py import-osm --force       # oś początkowa z OpenStreetMap
-python3 build.py fetch-ortho              # ortofotomapa GUGiK -> build/cache/ (poza repo)
+python3 build.py fetch-ortho              # ortofotomapy GUGiK -> build/cache/ (poza repo): ortho = cały teren
+                                          # (12 px/m), ortho_near = okolica toru (~19 px/m, nalot 2026 ma 5 cm);
+                                          # w EPSG:2180, kaflami po 2000 px (w EPSG:4326 serwer dawał tylko ~62 %
+                                          # rozdzielczości północ-południe); obrót siatki 2180 względem lokalnej
+                                          # północy (~1,6°) przechodzi do UV terenu (`uv` w ortho*.json)
 python3 build.py fit --force              # oś + szerokość dopasowane do asfaltu na ortofotomapie
                                           # (krawędź nie wychodzi za odrysowane bandy ani na płyty extra_asphalt)
 python3 build.py fetch-elevation          # wysokości NMT GUGiK
@@ -166,17 +182,21 @@ data/*.csv, *.json ──> trackgen.py ──> build/mesh.json ──> blender_b
 - `trackgen.py` – spline przez oś, siatki asfaltu, tarek, pobocza, band i terenu, punkty AC, walidacja (czysty Python).
 - `fit.py` – odczyt ortofotomapy i wykrywanie krawędzi asfaltu.
 - `build.py` – wiersz poleceń: pobieranie danych, podglądy, pliki moda, uruchomienie Blendera.
-- `blender_build.py` – uruchamiany w Blenderze: obiekty, tekstury, punkty AC, eksport FBX.
+- `blender_build.py` – uruchamiany w Blenderze: obiekty, tekstury, punkty AC, eksport FBX, render `ui/preview.png`.
+- `textures.py` – proceduralne, bezszwowe tekstury i mapy normalnych (asfalt, beton, tarki, opony, malowanie);
+  numpy z Blendera, więc dalej bez `pip install`.
 
 Obiekty w AC (pierwsza cyfra + nazwa nawierzchni = fizyka): `1ROAD`, `2ROAD` (płyty),
-`1APRON` i `2APRON` (czerwone i szare wylewki), `1KERB` (tarki w paski), `1GRASS`, `2GRASS` (teren), `1WALL` (opony), `2WALL` (mur). Bez fizyki: `LINES_WHITE`. Punkty: `AC_START_0..9`, `AC_PIT_0..9`, `AC_TIME_0_L/R`, `AC_HOTLAP_START_0`.
+`1APRON` i `2APRON` (czerwone i szare wylewki), `1KERB` (tarki w paski), `1GRASS`, `2GRASS`, `3GRASS` (teren), `1WALL` (kolizja band, niewidoczna), `2WALL` (mur). Bez fizyki: `TYRES_RED`, `TYRES_YELLOW` (opony),
+`LINES_WHITE`, `LINES_LANES`, `LINES_GRID`, `LINES_START` (malowanie). Punkty: `AC_START_0..9`, `AC_PIT_0..9`, `AC_TIME_0_L/R`, `AC_HOTLAP_START_0`.
 
 ## 8. Do zrobienia
 
 - strojenie fizyki po pierwszym przejeździe (cel: 50–52 s);
 - linia AI (`ai/fast_lane.ai`, nagrywana w grze);
 - mapa toru do gry (`map.png` + `data/map.ini`), kamery do powtórek;
-- tekstura asfaltu (łaty, pęknięcia), linie pól startowych, pachołki przy wierzchołkach, budynki i drzewa.
+- budynki i drzewa wokół toru (np. z modelu pokrycia terenu GUGiK), pachołki przy wierzchołkach, ogrodzenie;
+- ostrzejsza trawa z bliska (tekstura detalu na ortofotomapie, np. przez Custom Shaders Patch).
 
 ## Źródła danych i licencje
 

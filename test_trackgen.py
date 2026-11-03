@@ -74,7 +74,9 @@ assert seam[0] == 0.03 and seam[2] == 0.0 and seam[6] == 0.0 and seam[7] == 0.03
 # terrain: explicit triangles, and its height function lies exactly on them (run-off edge, plates, walls use it)
 mesh, hz = trackgen._terrain_grid(lambda x, y: 0.1 * x + 0.02 * x * y, (0.0, 0.0, 8.0, 8.0), 4.0)
 tv, tf, _ = mesh()
-assert all(len(f) == 3 for f in tf) and len(tf) == 2 * 3 * 3, len(tf)
+assert all(len(f) == 3 for f in tf) and len(tf) == 2 * 2 * 2, len(tf)
+mesh9, _ = trackgen._terrain_grid(lambda x, y: 0.0, (0.0, 0.0, 9.0, 6.0), 4.0)  # ends exactly on the extent
+assert {(min(v[k] for v in mesh9()[0]), max(v[k] for v in mesh9()[0])) for k in (0, 1)} == {(0.0, 9.0), (0.0, 6.0)}
 for f in tf:
     (ax, ay, az), (bx, by, bz), (cx, cy, cz) = (tv[i] for i in f)
     px, py = (ax + bx + cx) / 3, (ay + by + cy) / 3
@@ -96,6 +98,43 @@ for e in geo["empties"]:
         x, y, _ = e["pos"]
         assert abs(math.hypot(x, y) - R) < 2.5 and abs(e["fwd"][0] * x + e["fwd"][1] * y) < 0.1 * R, e
 
+# painted grid pattern and lane lines, relative to the start line: slots on the pattern (row k // 2, column k % 2),
+# lane lines parallel to the centreline (constant offset, common start and end), boxes + chequered line drawn
+gfeats = dict(feats, barriers=[b for b in feats["barriers"] if b["name"] != "on_road"],
+              grid={"first_m": 1.0, "row_m": 7.0, "stagger_m": 2.0, "lateral_m": [-1.2, 1.2], "painted": 4},
+              painted_lines=[{"name": f"lane{k}", "offset": o, "from_m": -4.0, "to_m": 30.0} for k, o in enumerate((-2.0, 2.0))])
+g4 = trackgen.build(cfg, pts, None, gfeats)
+st = [e for e in g4["empties"] if e["name"].startswith("AC_START")]
+assert len(st) == cfg["grid_slots"]
+def lateral(p):  # signed distance to the centreline, + = left (inside of this CCW circle)
+    s = min(g4["samples"], key=lambda q: math.dist(q[:2], p[:2]))
+    return math.hypot(*s[:2]) - math.hypot(*p[:2])
+for k, e in enumerate(st):
+    assert abs(lateral(e["pos"]) - gfeats["grid"]["lateral_m"][k % 2]) < 0.05, (k, lateral(e["pos"]))
+gap = lambda a, b: math.dist(st[a]["pos"][:2], st[b]["pos"][:2])
+row_at = lambda k: 7.0 * (R - gfeats["grid"]["lateral_m"][k % 2]) / R  # rows measured along the centreline
+assert all(abs(gap(k, k - 2) - row_at(k)) < 0.05 for k in range(2, len(st))), [round(gap(k, k - 2), 2) for k in range(2, len(st))]
+lanes = next(o for o in g4["objects"] if o["name"] == "LINES_LANES")
+lat = [lateral(v) for v in lanes["verts"]]  # each lane is 0.1 m wide: its two edges at offset +-0.05
+for o in (-2.0, 2.0):
+    mine = [d for d in lat if abs(d - o) < 0.5]
+    assert mine and max(mine) - min(mine) < 0.12, ("lane not parallel to the centreline", o, min(mine), max(mine))
+names = {o["name"] for o in g4["objects"]}
+assert {"LINES_LANES", "LINES_GRID", "LINES_START"} <= names, names
+assert len(next(o for o in g4["objects"] if o["name"] == "LINES_GRID")["faces"]) == 4 * 3  # painted boxes only
+assert trackgen.validate(cfg, pts, g4)[0] == [], trackgen.validate(cfg, pts, g4)[0]
+
+# two photos: grass/terrain faces wholly inside the sharper track-area photo use it, the rest the terrain photo;
+# no face lost, UVs within 0..1 of their own photo
+far_photo = {"x0": -200.0, "y0": -200.0, "x1": 200.0, "y1": 200.0}  # (this test's run-off reaches ~135 m out)
+near_photo = {"x0": -100.0, "y0": -100.0, "x1": 100.0, "y1": 100.0}
+g5, g6 = trackgen.build(cfg, pts, None, feats, far_photo), trackgen.build(cfg, pts, None, feats, far_photo, near_photo)
+count = lambda g, names: sum(len(o["faces"]) for o in g["objects"] if o["name"] in names)
+assert count(g5, {"1GRASS", "2GRASS"}) == count(g6, {"1GRASS", "2GRASS", "3GRASS", "4GRASS"})
+mats = {o["name"]: o["material"] for o in g6["objects"]}
+assert mats["1GRASS"] == mats["2GRASS"] == "ortho_near" and mats["3GRASS"] == "ortho", mats
+assert all(-1e-9 <= c <= 1 + 1e-9 for o in g6["objects"] if o["material"].startswith("ortho") for uv in o["uvs"] for c in uv)
+
 # a broken input (two points far apart) must be flagged
 broken = pts[:8] + [(p[0] + 200, p[1], 0.0, 8.0) for p in pts[8:]]
 assert trackgen.validate(cfg, broken, trackgen.build(cfg, broken))[0]
@@ -108,5 +147,26 @@ e = fit.fit_edges(road, [(0.0, 1.0)] * 5, lambda x, y: fit.classify(photo(x, y))
 assert all(abs(a - 4.0) < 0.15 and abs(b - 4.0) < 0.15 for a, b in e), e
 
 assert abs(fit.ray_hit((0, 0), (0, 1), [[(-1, 3), (1, 3)]], 5) - 3) < 1e-9 and fit.ray_hit((0, 0), (0, 1), [[(-1, 3), (1, 3)]], 2) is None
+
+# procedural textures (numpy: bundled with Blender, optional here): right size, 0..1, repeatable, seamless tiles
+try:
+    import numpy as np
+    import textures
+except ImportError:
+    print("numpy not installed - texture checks skipped (Blender has its own)")
+else:
+    for tname, (make, strength) in textures.SURFACES.items():
+        albedo, height = make()
+        assert albedo.ndim == 3 and albedo.shape[2] == 3 and albedo.shape[:2] == height.shape, tname
+        assert albedo.min() >= 0 and albedo.max() <= 1, tname
+        assert np.array_equal(albedo, make()[0]), f"{tname}: not deterministic"
+        nm = textures.normal_map(height, strength)
+        assert nm.min() >= 0 and nm.max() <= 1 and nm[..., 2].min() > 0.5, tname
+        # across the tile seam the height changes no more than between interior neighbours (the kerb stripes'
+        # hard edges along v are excluded: they repeat every stripe, also across the seam)
+        for axis in (0, 1) if tname != "kerb" else (1,):
+            seam = np.abs(np.take(height, 0, axis) - np.take(height, -1, axis)).mean()
+            inner = np.abs(np.diff(height, axis=axis)).mean()
+            assert seam < 3 * inner, (tname, axis, seam, inner)
 
 print("ok", f"{geo['length']:.2f} m,", sum(len(o['faces']) for o in geo['objects']), "faces")

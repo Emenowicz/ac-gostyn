@@ -16,7 +16,7 @@ GROUND_SINK_M = 0.05  # terrain sits below the drivable surfaces to avoid z-figh
 # (project author). One object per material, so the two pours are 1APRON and 2APRON.
 KERB_STYLES = {"stripes": ("1KERB", "kerb", 0.0),  # red/yellow stripes, 0.5 m
                "apron": ("1APRON", "kerb_apron", 0.03),  # red-dyed concrete band with a light outer border
-               "concrete": ("2APRON", "concrete", 0.03)}  # plain grey concrete
+               "concrete": ("2APRON", "kerb_concrete", 0.03)}  # plain grey concrete
 KERB_OBJECTS = {name for name, _, _ in KERB_STYLES.values()}
 KERB_RAMP_M = 0.15  # a raised kerb climbs and drops over this width at both sides (no vertical step to catch a wheel)
 KERB_END_RAMP_M = 0.6  # ... and over this length where it starts and ends along the track
@@ -218,25 +218,28 @@ def _terrain_grid(z_at, extent, cell):
     no exporter or ksEditor picks the diagonal: the run-off edge, plates and barrier feet can then sit exactly on it.
     """
     x0, y0, x1, y1 = extent
-    nx, ny = int((x1 - x0) / cell) + 1, int((y1 - y0) / cell) + 1
+    # cells of `cell` m, the last column/row narrower so the mesh ends exactly on the extent (the photo's: UVs 0..1)
+    nx, ny = max(1, math.ceil((x1 - x0) / cell - 1e-9)), max(1, math.ceil((y1 - y0) / cell - 1e-9))
+    gx = [min(x0 + i * cell, x1) for i in range(nx + 1)]
+    gy = [min(y0 + j * cell, y1) for j in range(ny + 1)]
     zs = {}
 
     def zv(i, j):
         if (i, j) not in zs:
-            zs[i, j] = z_at(x0 + i * cell, y0 + j * cell)
+            zs[i, j] = z_at(gx[i], gy[j])
         return zs[i, j]
 
     def height(x, y):
-        fx, fy = (x - x0) / cell, (y - y0) / cell
-        i, j = min(max(math.floor(fx), 0), nx - 1), min(max(math.floor(fy), 0), ny - 1)
-        tx, ty = fx - i, fy - j
+        i = min(max(math.floor((x - x0) / cell), 0), nx - 1)
+        j = min(max(math.floor((y - y0) / cell), 0), ny - 1)
+        tx, ty = (x - gx[i]) / (gx[i + 1] - gx[i]), (y - gy[j]) / (gy[j + 1] - gy[j])
         z00, z10, z01, z11 = zv(i, j), zv(i + 1, j), zv(i, j + 1), zv(i + 1, j + 1)
         if tx >= ty:  # triangle (00, 10, 11)
             return z00 + tx * (z10 - z00) + ty * (z11 - z10)
         return z00 + tx * (z11 - z01) + ty * (z01 - z00)  # triangle (00, 11, 01)
 
     def mesh():
-        verts = [(x0 + i * cell, y0 + j * cell, zv(i, j)) for j in range(ny + 1) for i in range(nx + 1)]
+        verts = [(gx[i], gy[j], zv(i, j)) for j in range(ny + 1) for i in range(nx + 1)]
         v = lambda i, j: j * (nx + 1) + i
         faces = [f for j in range(ny) for i in range(nx)
                  for f in ([v(i, j), v(i + 1, j), v(i + 1, j + 1)], [v(i, j), v(i + 1, j + 1), v(i, j + 1)])]
@@ -326,6 +329,83 @@ def _plate(poly, z_at, cell=1.0):
     return verts, faces, [(x / UV_M, y / UV_M) for x, y, _ in verts]
 
 
+TYRE_R = 0.3  # tyre barriers: car tyres lying flat, 0.6 m across (= wall_thickness_m), ~0.2 m each
+TYRE_BLOCK = 3  # stacks per colour block (red / yellow alternate, as painted)
+
+
+def _tyre_stacks(points, base_fn, height, seg=8):
+    """Visual tyre stacks along a barrier polyline: one stack every 2 * TYRE_R, round(height / 0.2) tyres high.
+
+    Each stack is a ring profile (waisted at every joint between tyres, a flat top annulus around the hole) with
+    u around the stack and v up it. Returns {colour: (verts, faces, uvs)}; the collision stays the plain 1WALL box.
+    """
+    n_t = max(1, round(height / 0.2))
+    th, top = height / n_t, height + 0.01  # 1 cm above the collision box, so its top doesn't flicker through
+    prof = [(k * th / 2, TYRE_R * (0.88 if k % 2 == 0 else 1.0)) for k in range(2 * n_t + 1)]
+    prof[-1] = (top, prof[-1][1])
+    prof.append((top, TYRE_R * 0.55))  # inner edge of the top annulus; the dark box shows through as the hole
+    total = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
+    count = max(1, round(total / (2 * TYRE_R)))
+    out = {"tyre_red": ([], [], []), "tyre_yellow": ([], [], [])}
+    seg_i, done = 0, 0.0
+    for j in range(count + (0 if points[0] == points[-1] else 1)):
+        s = j * total / count if count else 0.0
+        while seg_i < len(points) - 2 and done + math.dist(points[seg_i], points[seg_i + 1]) < s:
+            done += math.dist(points[seg_i], points[seg_i + 1])
+            seg_i += 1
+        a, b = points[seg_i], points[seg_i + 1]
+        t = min(1.0, (s - done) / (math.dist(a, b) or 1.0))
+        cx, cy = a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])
+        z0 = base_fn(cx, cy)
+        verts, faces, uvs = out["tyre_red" if (j // TYRE_BLOCK) % 2 == 0 else "tyre_yellow"]
+        base = len(verts)
+        for z, r in prof:
+            for k in range(seg + 1):  # seg + 1 columns: the texture seam gets its own vertices
+                ang = 2 * math.pi * k / seg
+                verts.append((cx + r * math.cos(ang), cy + r * math.sin(ang), z0 + z))
+                uvs.append((k / seg, min(z, height) / height))
+        for ring in range(len(prof) - 1):
+            for k in range(seg):
+                p = base + ring * (seg + 1) + k
+                faces.append([p, p + 1, p + seg + 2, p + seg + 1])  # outward walls, then the top annulus (up)
+    return out
+
+
+def _ribbon(points, width, zfn):
+    """Flat strip `width` wide centred on a polyline, faces up; u 0 (right of the polyline's direction) -> 1 (left),
+    v = distance / UV_M along. For painted markings (no physics)."""
+    verts, uvs, faces, s = [], [], [], 0.0
+    m = len(points)
+    for i, (x, y) in enumerate(points):
+        a, b = points[max(i - 1, 0)], points[min(i + 1, m - 1)]
+        d = math.hypot(b[0] - a[0], b[1] - a[1]) or 1.0
+        lx, ly = -(b[1] - a[1]) / d, (b[0] - a[0]) / d
+        if i:
+            s += math.dist(points[i - 1], (x, y))
+        for side, u in ((-1, 0.0), (1, 1.0)):  # right, left
+            px, py = x + side * width / 2 * lx, y + side * width / 2 * ly
+            verts.append((px, py, zfn(px, py)))
+            uvs.append((u, s / UV_M))
+    for i in range(m - 1):
+        faces.append([2 * i, 2 * i + 2, 2 * i + 3, 2 * i + 1])  # right, right next, left next, left: up
+    return verts, faces, uvs
+
+
+GRID_BOX = (1.2, 1.5, 0.12)  # painted grid box (U open at the back): length along, width across, line width [m]
+START_LINE_M = 0.8  # chequered start/finish band, across the track (orthophoto)
+
+
+def _grid_box(cx, cy, fx, fy, zfn):
+    """U-shaped grid box centred on a start slot, closed at the front (driving direction fx, fy)."""
+    ln, wd, lw = GRID_BOX
+    lx, ly = -fy, fx
+    p = lambda a, l: (cx + a * fx + l * lx, cy + a * fy + l * ly)
+    parts = [_ribbon([p(ln / 2 - lw / 2, -wd / 2), p(ln / 2 - lw / 2, wd / 2)], lw, zfn)]  # front bar
+    for side in (-1, 1):
+        parts.append(_ribbon([p(-ln / 2, side * (wd / 2 - lw / 2)), p(ln / 2 - lw, side * (wd / 2 - lw / 2))], lw, zfn))
+    return parts
+
+
 def _dist_to_polyline(p, line):
     best = math.inf
     for a, b in zip(line, line[1:]):
@@ -343,7 +423,27 @@ def load_features(path):
         return json.load(f)
 
 
-def build(cfg, pts, ground=None, features=None, photo=None):
+def _split(o, keep):
+    """Object -> (faces where keep(face), the other faces), each with only the vertices it uses."""
+    parts = []
+    for want in (True, False):
+        remap, verts, uvs, faces = {}, [], [], []
+        for f in o["faces"]:
+            if bool(keep(f)) != want:
+                continue
+            for i in f:
+                if i not in remap:
+                    remap[i] = len(verts)
+                    verts.append(o["verts"][i])
+                    uvs.append(o["uvs"][i])
+            faces.append([remap[i] for i in f])
+        parts.append(dict(o, verts=verts, uvs=uvs, faces=faces))
+    return parts
+
+
+def build(cfg, pts, ground=None, features=None, photo=None, photo_near=None):
+    """photo / photo_near: ortho.json / ortho_near.json extents (local metres) - the terrain photo and an optional
+    sharper one of the track area, draped on the grass and terrain faces wholly inside it."""
     samples, length = resample(pts, cfg["sample_step_m"])
     n = len(samples)
     ds = length / n
@@ -400,6 +500,8 @@ def build(cfg, pts, ground=None, features=None, photo=None):
     every = [True] * n
     road_l, road_r = rows(half), rows([-h for h in half])
     objects = [_merge("1ROAD", "road", [_strip(road_r, road_l, every, False)])]
+    # asphalt texture in plan (like the plates): along-track UVs squeeze it at the inside of a hairpin
+    objects[0]["uvs"] = [(v[0] / UV_M, v[1] / UV_M) for v in objects[0]["verts"]]
     # painted lines: visual only (no digit prefix = no physics in AC), lifted 5 mm so they don't z-fight the asphalt
     lift, lw = 0.005, cfg["line_width_m"]
     edge_lines = [_strip(rows([side * (h - lw - 0.05) for h in half], lift), rows([side * (h - 0.05) for h in half], lift),
@@ -461,22 +563,77 @@ def build(cfg, pts, ground=None, features=None, photo=None):
     walls = [part for name, line in barriers.items()
              for part in _barrier(line, ground_z, heights.get(name, cfg["wall_height_m"]), cfg["wall_thickness_m"])]
     x0, y0, x1, y1 = (v + d for v, d in zip(extent, (1, 1, -1, -1)))  # perimeter, so nobody drives off the world
-    objects.append(_merge("1WALL", "wall", walls))
+    # collision box around the tyre stacks; "collider" is a fully transparent alpha-test material: AC doesn't draw it
+    objects.append(_merge("1WALL", "collider", walls))
+    on_kerb = {b["name"] for b in (features or {}).get("barriers", []) if b.get("on_kerb")}
+    stacks = {"tyre_red": [], "tyre_yellow": []}
+    for name, line in barriers.items():
+        if name.startswith("auto_"):
+            continue
+        # tyres on a kerb stand on it (track level); the rest on the terrain, sunk 2 cm so they don't float
+        base = (lambda x, y: max(ground_z(x, y), z_at(x, y) + GROUND_SINK_M) - 0.02) if name in on_kerb else \
+               (lambda x, y: ground_z(x, y) - 0.02)
+        for colour, part in _tyre_stacks(line, base, heights.get(name, cfg["wall_height_m"])).items():
+            stacks[colour].append(part)
+    objects += [_merge(f"TYRES_{c.split('_')[1].upper()}", c, parts) for c, parts in stacks.items()]  # visual only
+
+    # painted markings (visual only, lifted like the edge lines; the chequered line a little higher where they cross)
+    on_road = lambda dz: (lambda x, y: z_at(x, y) + GROUND_SINK_M + dz)
+    along = _along(samples, tang, left, ds, _start_index(cfg, samples, features)[0])
+    lanes = []
+    for pl in (features or {}).get("painted_lines", []):  # parallel to the centreline, from_m..to_m before the line
+        a, b = pl["from_m"], pl["to_m"]
+        steps = max(1, math.ceil(abs(b - a) / ds))
+        lanes.append(_ribbon([along(a + (b - a) * k / steps, pl["offset"])[:2] for k in range(steps + 1)],
+                             pl.get("width", lw), on_road(lift)))
+    for cl in (features or {}).get("painted_cross", []):  # dashed line across the asphalt, at_m before the line
+        x, y, _, (tx, ty) = along(cl["at_m"], 0.0)
+        i = min(range(n), key=lambda k: math.dist(samples[k][:2], (x, y)))
+        reach, dash, gap = samples[i][3] / 2 - 0.15, cl.get("dash_m", 0.3), cl.get("gap_m", 0.2)
+        t = -reach
+        while t < reach:  # each dash a short ribbon along the left normal (-ty, tx)
+            e = min(t + dash, reach)
+            lanes.append(_ribbon([(x - ty * t, y + tx * t), (x - ty * e, y + tx * e)], cl.get("width", 0.12),
+                                 on_road(1.5 * lift)))
+            t = e + gap
+    objects.append(_merge("LINES_LANES", "paint_white", lanes))
+    empties = _empties(cfg, samples, tang, left, ds, features)
+    painted = ((features or {}).get("grid") or {}).get("painted", 0)
+    boxes = [part for e in empties[3:3 + painted]
+             for part in _grid_box(e["pos"][0], e["pos"][1], e["fwd"][0], e["fwd"][1], on_road(lift))]
+    objects.append(_merge("LINES_GRID", "paint_mint", boxes))
+    if features and features.get("start_finish"):
+        objects.append(_merge("LINES_START", "chequer",
+                              [_ribbon([tuple(p) for p in features["start_finish"]], START_LINE_M, on_road(2 * lift))]))
     objects.append(_merge("2WALL", "concrete", _barrier([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], ground_z, 2.0, 0.5)))
     if plates:  # on the terrain mesh, or on z_at where that is higher (under the track asphalt they overlap)
         objects.append(_merge("2ROAD", "road", [_plate(pl, lambda x, y: max(z_at(x, y), ground_z(x, y))) for pl in plates]))
     objects.append(_merge("2GRASS", "ground", [terrain_mesh()]))
     objects = [o for o in objects if o["faces"]]
     if photo:  # orthophoto draped over the terrain and the run-off grass: planar UVs over the photo's extent
-        x0, y0, x1, y1 = extent
+        def photo_uv(ph):  # local metres -> UV of that photo: its affine (EPSG:2180, turned) or its axis-aligned extent
+            if "uv" in ph:
+                (au, bu, cu), (av, bv, cv) = ph["uv"]
+                return lambda x, y: (au * x + bu * y + cu, av * x + bv * y + cv)
+            return lambda x, y: ((x - ph["x0"]) / (ph["x1"] - ph["x0"]), (y - ph["y0"]) / (ph["y1"] - ph["y0"]))
+        drape = lambda o, mat, ph: dict(o, material=mat, uvs=[photo_uv(ph)(v[0], v[1]) for v in o["verts"]])
+        out = []
         for o in objects:
-            if o["name"] in ("1GRASS", "2GRASS"):
-                o["material"] = "ortho"
-                o["uvs"] = [((v[0] - x0) / (x1 - x0), (v[1] - y0) / (y1 - y0)) for v in o["verts"]]
+            if o["name"] not in ("1GRASS", "2GRASS"):
+                out.append(o)
+            elif photo_near:  # faces wholly inside the sharper track-area photo use it; the rest the terrain photo
+                ne = (photo_near["x0"], photo_near["y0"], photo_near["x1"], photo_near["y1"])
+                inside = lambda f: all(ne[0] <= o["verts"][i][0] <= ne[2] and ne[1] <= o["verts"][i][1] <= ne[3] for i in f)
+                near, far = _split(o, inside)
+                far["name"] = {"1GRASS": "4GRASS", "2GRASS": "3GRASS"}[o["name"]]  # same GRASS physics
+                out += [drape(near, "ortho_near", photo_near), drape(far, "ortho", photo)]
+            else:
+                out.append(drape(o, "ortho", photo))
+        objects = [o for o in out if o["faces"]]
 
     return {
         "samples": samples, "length": length, "ds": ds, "curvature": curv,
-        "objects": objects, "empties": _empties(cfg, samples, tang, left, ds, features),
+        "objects": objects, "empties": empties,
         "polylines": {"road_l": [p for p, _ in road_l], "road_r": [p for p, _ in road_r],
                       "edge_l": edge_lines[1], "edge_r": edge_lines[-1]},
         "barriers": barriers, "kerb_id": kerb_id, "left": left,
@@ -486,19 +643,38 @@ def build(cfg, pts, ground=None, features=None, photo=None):
     }
 
 
-def _empties(cfg, samples, tang, left, ds, features):
+def _start_index(cfg, samples, features):
+    """Centreline sample nearest the start/finish line (or start_xy), so editing the centreline doesn't move it."""
+    line = (features or {}).get("start_finish")
+    sx, sy = ((line[0][0] + line[1][0]) / 2, (line[0][1] + line[1][1]) / 2) if line else cfg["start_xy"]
+    return min(range(len(samples)), key=lambda i: math.dist(samples[i][:2], (sx, sy))), (sx, sy)
+
+
+def _along(samples, tang, left, ds, i0):
+    """(back, lateral) -> (x, y, z, tangent): `back` metres before the start line against the driving direction
+    (negative = after it), `lateral` metres to the left; interpolated between samples."""
     n = len(samples)
+
+    def at(back, lateral):
+        f = i0 - back / ds
+        i, t = math.floor(f), f - math.floor(f)
+        a, b = i % n, (i + 1) % n
+        lerp = lambda p, q: tuple(p[k] + t * (q[k] - p[k]) for k in range(len(p)))
+        (x, y, z), (lx, ly), (tx, ty) = lerp(samples[a][:3], samples[b][:3]), lerp(left[a], left[b]), lerp(tang[a], tang[b])
+        dl, dt = math.hypot(lx, ly) or 1.0, math.hypot(tx, ty) or 1.0
+        return x + lateral * lx / dl, y + lateral * ly / dl, z, (tx / dt, ty / dt)
+    return at
+
+
+def _empties(cfg, samples, tang, left, ds, features):
     flip = -1 if cfg.get("spawn_flip") else 1
     line = features.get("start_finish") if features else None
-    # start line = centreline sample nearest to it, so editing the centreline doesn't move it
-    sx, sy = ((line[0][0] + line[1][0]) / 2, (line[0][1] + line[1][1]) / 2) if line else cfg["start_xy"]
-    i0 = min(range(n), key=lambda i: math.dist(samples[i][:2], (sx, sy)))
+    i0, (sx, sy) = _start_index(cfg, samples, features)
+    along = _along(samples, tang, left, ds, i0)
 
     def at(back, lateral, name):
-        i = (i0 - round(back / ds)) % n
-        x, y, z = samples[i][:3]
-        return {"name": name, "pos": (x + lateral * left[i][0], y + lateral * left[i][1], z),
-                "fwd": (flip * tang[i][0], flip * tang[i][1])}
+        x, y, z, (tx, ty) = along(back, lateral)
+        return {"name": name, "pos": (x, y, z), "fwd": (flip * tx, flip * ty)}
 
     half = samples[i0][3] / 2
     sp = cfg["grid_spacing_m"]
@@ -511,8 +687,13 @@ def _empties(cfg, samples, tang, left, ds, features):
                     + (q[1] - sy) * ly * (1 if e["name"].endswith("L") else -1))
             d = math.dist(p, (sx, sy)) or 1.0
             e["pos"] = (p[0] + (p[0] - sx) / d * 0.5, p[1] + (p[1] - sy) / d * 0.5, z)
-    out += [at(3 + (k // 2) * sp + (k % 2) * sp / 2, (half / 2) * (1 if k % 2 == 0 else -1), f"AC_START_{k}")
-            for k in range(cfg["grid_slots"])]
+    grid = (features or {}).get("grid")
+    if grid:  # the painted grid pattern (orthophoto): slot k in row k // 2, column k % 2 (column 0 nearest the line)
+        out += [at(grid["first_m"] + (k // 2) * grid["row_m"] + (k % 2) * grid["stagger_m"],
+                   grid["lateral_m"][k % 2], f"AC_START_{k}") for k in range(cfg["grid_slots"])]
+    else:  # two staggered columns, sp apart
+        out += [at(3 + (k // 2) * sp + (k % 2) * sp / 2, (half / 2) * (1 if k % 2 == 0 else -1), f"AC_START_{k}")
+                for k in range(cfg["grid_slots"])]
     # pit boxes share the grid slots: the paddock isn't modelled, and AC uses pits (practice) and grid (race) separately
     out += [dict(e, name=f"AC_PIT_{k}") for k, e in enumerate(out[3:3 + cfg["pit_slots"]])]
     return out
@@ -649,11 +830,12 @@ def validate(cfg, pts, geo):
             errors.append(f"{o['name']}: {len(o['verts'])} vertices, KN5 limit is 65534 per object - split it")
         if o["name"] == "1ROAD" and len(o["faces"]) != len(sm):  # one quad per sample = no holes
             errors.append(f"1ROAD has {len(o['faces'])} quads for {len(sm)} samples - asphalt has holes")
-        wall = o["name"].endswith("WALL")
+        wall = o["name"].endswith("WALL")  # vertical sides are fine, upside-down not
+        round_ = o["name"].startswith("TYRES_")  # tyre bulges face down below their widest point: only degenerate counts
         for f in o["faces"]:
             nx, ny, nz = _normal(o["verts"], f)
             area = math.sqrt(nx * nx + ny * ny + nz * nz)
-            if area < 1e-9 or (nz < -0.01 * area if wall else nz <= 0):
+            if area < 1e-9 or (not round_ and (nz < -0.01 * area if wall else nz <= 0)):
                 errors.append(f"{o['name']}: degenerate or flipped face {f}")
                 break
 

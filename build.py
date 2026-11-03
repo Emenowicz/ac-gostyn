@@ -1,7 +1,7 @@
 """Kartodrom Gostyń -> Assetto Corsa track generator.
 
   python3 build.py import-osm [--force]   fetch centreline from OpenStreetMap -> data/centerline.csv
-  python3 build.py fetch-ortho            download GUGiK orthophoto of the area -> build/cache/ortho.bmp
+  python3 build.py fetch-ortho            download GUGiK orthophotos (terrain + sharper track area) -> build/cache/
   python3 build.py fit --force            snap centreline + per-point width to the asphalt on the orthophoto
   python3 build.py fetch-elevation        GUGiK NMT heights -> z in data/centerline.csv + data/elevation.csv
   python3 build.py fit-kerbs              measure each traced kerb's painted width on the orthophoto -> features.json
@@ -189,29 +189,87 @@ def fetch(url, timeout=120):
         return r.read()
 
 
+def _bmp_rows(data):
+    """24/32-bit BMP -> (width, height, rows of RGB bytes, top row first)"""
+    off = struct.unpack_from("<I", data, 10)[0]
+    w, h, _, bpp = struct.unpack_from("<iiHH", data, 18)
+    bpp //= 8
+    stride = (w * bpp + 3) & ~3
+    rows = []
+    for r in range(abs(h)):
+        row = data[off + (abs(h) - 1 - r if h > 0 else r) * stride:][:w * bpp]
+        rows.append(row if bpp == 3 else b"".join(row[i:i + 3] for i in range(0, len(row), 4)))
+    return w, abs(h), rows
+
+
+def _fetch_wms(cfg, extent, ppm, name, tile=2000):
+    """GUGiK orthophoto (WMS) covering `extent` (local metres) at `ppm` px/m -> build/cache/<name>.bmp + .json.
+
+    Requested in EPSG:2180, the photo's own grid (square metre pixels). In EPSG:4326 the server's pixels are square
+    in degrees, so north-south only got ~62 % of the asked resolution (every 2nd-3rd row a duplicate). The 2180 grid is
+    turned ~1.6 deg against local north (meridian convergence), so the image is kept as it comes and the json carries
+    the affine map local metres -> image UV ("uv": [[au, bu, cu], [av, bv, cv]], v = 1 at the top/north edge), used by
+    the terrain UVs (trackgen) and by fit.Ortho. Fetched in tiles of at most `tile` px a side (the server refuses large
+    images: 4096 x 3416 fails with HTTP 400) and stitched; tile edges fall on whole pixels."""
+    x0, y0, x1, y1 = extent
+    corners = [to_pl1992(*to_latlon(cfg, x, y)) for x, y in ((x0, y0), (x1, y0), (x0, y1), (x1, y1))]  # (N, E)
+    n0, n1 = min(c[0] for c in corners) - 1, max(c[0] for c in corners) + 1
+    e0, e1 = min(c[1] for c in corners) - 1, max(c[1] for c in corners) + 1
+    w, h = round((e1 - e0) * ppm), round((n1 - n0) * ppm)
+    e1, n1 = e0 + w / ppm, n0 + h / ppm  # whole pixels
+    out_rows = [bytearray() for _ in range(h)]  # top (north) row first
+    for ty in range(0, h, tile):
+        for tx in range(0, w, tile):
+            tw, th = min(tile, w - tx), min(tile, h - ty)
+            te0, te1 = e0 + tx / ppm, e0 + (tx + tw) / ppm
+            tn1, tn0 = n1 - ty / ppm, n1 - (ty + th) / ppm
+            params = dict(SERVICE="WMS", REQUEST="GetMap", VERSION="1.3.0", LAYERS="Raster", STYLES="",
+                          CRS="EPSG:2180", BBOX=f"{tn0:.3f},{te0:.3f},{tn1:.3f},{te1:.3f}",  # 1.3.0: northing first
+                          WIDTH=tw, HEIGHT=th, FORMAT="image/bmp")
+            data = fetch(ORTHO_WMS + "?" + urllib.parse.urlencode(params))
+            if not data.startswith(b"BM"):
+                sys.exit("WMS did not return a BMP: " + data[:300].decode("utf-8", "replace"))
+            bw, bh, rows = _bmp_rows(data)
+            if (bw, bh) != (tw, th):
+                sys.exit(f"WMS returned {bw}x{bh} px for a {tw}x{th} tile")
+            for r, row in enumerate(rows):
+                out_rows[ty + r] += row
+    pad = bytes((w * 3 + 3) // 4 * 4 - w * 3)
+    pixels = b"".join(bytes(out_rows[r]) + pad for r in reversed(range(h)))  # BMP stores bottom-up
+    header = (b"BM" + struct.pack("<IHHI", 54 + len(pixels), 0, 0, 54)
+              + struct.pack("<IiiHHIIiiII", 40, w, h, 1, 24, 0, len(pixels), 2835, 2835, 0, 0))
+    # local -> (E, N) is affine to well under a millimetre over a few hundred metres: fit it on three corners
+    (na, ea), (nb, eb), (nc, ec) = corners[0], corners[1], corners[2]
+    to_u = lambda e: (e - e0) / (e1 - e0)
+    to_v = lambda n: (n - n0) / (n1 - n0)
+    au, bu = (to_u(eb) - to_u(ea)) / (x1 - x0), (to_u(ec) - to_u(ea)) / (y1 - y0)
+    av, bv = (to_v(nb) - to_v(na)) / (x1 - x0), (to_v(nc) - to_v(na)) / (y1 - y0)
+    uv = [[au, bu, to_u(ea) - au * x0 - bu * y0], [av, bv, to_v(na) - av * x0 - bv * y0]]
+    os.makedirs(CACHE, exist_ok=True)
+    with open(os.path.join(CACHE, name + ".bmp"), "wb") as f:
+        f.write(header + pixels)
+    with open(os.path.join(CACHE, name + ".json"), "w") as f:
+        json.dump({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "px_per_m": round(ppm, 3), "uv": uv, "crs": "EPSG:2180",
+                   "bbox_2180_NE": [n0, e0, n1, e1], "fetched": date.today().isoformat(),
+                   "source": "Geoportal.gov.pl / GUGiK, ortofotomapa (WMS HighResolution)"}, f, indent=1)
+    print(f"{name} {w}x{h} px, {x1 - x0:.0f}x{y1 - y0:.0f} m, {ppm:.1f} px/m (EPSG:2180) -> build/cache/{name}.bmp")
+
+
 def fetch_ortho(cfg):
+    """Two photos: ortho = the terrain's extent and texture (and the reference for fit), ortho_near = a sharper one of
+    the track area (the 2026 flight has 5 cm pixels)."""
     _, pts = trackgen.load(TRACK_JSON, CENTERLINE)
     feats = trackgen.load_features(FEATURES) or {}
     xy = [p[:2] for p in pts] + [q for k in ("barriers", "extra_asphalt") for b in feats.get(k, []) for q in b["points"]]
-    m, ppm = cfg["ortho_margin_m"], cfg["ortho_px_per_m"]  # the photo is also the terrain's extent and texture
-    x0, x1 = math.floor(min(p[0] for p in xy) - m), math.ceil(max(p[0] for p in xy) + m)
-    y0, y1 = math.floor(min(p[1] for p in xy) - m), math.ceil(max(p[1] for p in xy) + m)
-    w, h = round((x1 - x0) * ppm), round((y1 - y0) * ppm)
-    if max(w, h) > 4096:
-        sys.exit(f"{w}x{h} px exceeds the WMS limit of 4096 - lower ortho_px_per_m or ortho_margin_m")
-    (la0, lo0), (la1, lo1) = to_latlon(cfg, x0, y0), to_latlon(cfg, x1, y1)
-    params = dict(SERVICE="WMS", REQUEST="GetMap", VERSION="1.3.0", LAYERS="Raster", STYLES="", CRS="EPSG:4326",
-                  BBOX=f"{la0:.8f},{lo0:.8f},{la1:.8f},{lo1:.8f}", WIDTH=w, HEIGHT=h, FORMAT="image/bmp")
-    data = fetch(ORTHO_WMS + "?" + urllib.parse.urlencode(params))
-    if not data.startswith(b"BM"):
-        sys.exit("WMS did not return a BMP: " + data[:300].decode("utf-8", "replace"))
-    os.makedirs(CACHE, exist_ok=True)
-    with open(os.path.join(CACHE, "ortho.bmp"), "wb") as f:
-        f.write(data)
-    with open(os.path.join(CACHE, "ortho.json"), "w") as f:
-        json.dump({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "px_per_m": ppm, "fetched": date.today().isoformat(),
-                   "source": "Geoportal.gov.pl / GUGiK, ortofotomapa (WMS HighResolution)"}, f, indent=1)
-    print(f"ortho {w}x{h} px, {x1 - x0}x{y1 - y0} m -> build/cache/ortho.bmp")
+    lo = [min(p[k] for p in xy) for k in (0, 1)]
+    hi = [max(p[k] for p in xy) for k in (0, 1)]
+    m = cfg["ortho_margin_m"]
+    _fetch_wms(cfg, (math.floor(lo[0] - m), math.floor(lo[1] - m), math.ceil(hi[0] + m), math.ceil(hi[1] + m)),
+               cfg["ortho_px_per_m"], "ortho")
+    m = cfg["ortho_near_margin_m"]
+    near = (math.floor(lo[0] - m), math.floor(lo[1] - m), math.ceil(hi[0] + m), math.ceil(hi[1] + m))
+    span = max(near[2] - near[0], near[3] - near[1]) * 1.03 + 2  # + the 1.6 deg turn of the 2180 grid
+    _fetch_wms(cfg, near, min(cfg["ortho_near_px_per_m"], 4096 / span), "ortho_near")  # one 4096 texture
 
 
 def _circular_fill(values):
@@ -286,11 +344,10 @@ def fit_centreline(cfg, force):
 
 def generate(cfg):
     _, pts = trackgen.load(TRACK_JSON, CENTERLINE)
-    photo = None
-    if os.path.exists(os.path.join(CACHE, "ortho.json")):
-        with open(os.path.join(CACHE, "ortho.json")) as f:
-            photo = json.load(f)
-    geo = trackgen.build(cfg, pts, trackgen.load_ground(ELEVATION), trackgen.load_features(FEATURES), photo)
+    photo, near = (json.load(open(os.path.join(CACHE, n + ".json"))) if os.path.exists(os.path.join(CACHE, n + ".json"))
+                   else None for n in ("ortho", "ortho_near"))
+    geo = trackgen.build(cfg, pts, trackgen.load_ground(ELEVATION), trackgen.load_features(FEATURES), photo,
+                         near if photo else None)
     errors, warnings = trackgen.validate(cfg, pts, geo)
     for w in warnings:
         print("WARN ", w)
@@ -299,7 +356,8 @@ def generate(cfg):
     os.makedirs(BUILD, exist_ok=True)
     with open(os.path.join(BUILD, "mesh.json"), "w") as f:
         json.dump({"objects": geo["objects"], "empties": geo["empties"],
-                   "photo": os.path.join(CACHE, "ortho.bmp") if photo else None}, f)
+                   "photo": os.path.join(CACHE, "ortho.bmp") if photo else None,
+                   "photo_near": os.path.join(CACHE, "ortho_near.bmp") if photo and near else None}, f)
     write_preview(geo, os.path.join(BUILD, "preview.svg"))
     if os.path.exists(os.path.join(CACHE, "ortho.json")):
         write_ortho_overlay(geo, pts, os.path.join(BUILD, "ortho_overlay.svg"))
@@ -312,10 +370,10 @@ def generate(cfg):
 
 
 def write_preview(geo, path):
-    colors = {"road": "#333", "kerb": "#d22", "kerb_apron": "#d22", "concrete": "#999", "grass": "#5a3", "wall": "#eee"}
+    colors = {"road": "#333", "kerb": "#d22", "kerb_apron": "#d22", "kerb_concrete": "#999", "grass": "#5a3", "collider": "#eee"}
     polys = []
     for o in geo["objects"]:
-        if o["material"] in colors and o["name"] != "2WALL":  # the concrete perimeter wall would just frame the view
+        if o["material"] in colors:
             for f in o["faces"]:
                 pts = " ".join(f"{o['verts'][i][0]:.1f},{-o['verts'][i][1]:.1f}" for i in f)
                 polys.append(f'<polygon points="{pts}" fill="{colors[o["material"]]}"/>')
@@ -367,9 +425,22 @@ def write_ortho_overlay(geo, pts, path):
         el.append(f'<circle cx="{(x - m["x0"]) * k:.0f}" cy="{(m["y1"] - y) * k:.0f}" r="6" '
                   f'fill="{"#00f" if e["name"].startswith("AC_TIME") else "#fc0"}"><title>{e["name"]}</title></circle>')
     w, h = round((m["x1"] - m["x0"]) * k), round((m["y1"] - m["y0"]) * k)
+    if "uv" in m:  # EPSG:2180 photo, turned: place its pixels with the inverse of its local -> UV map
+        with open(os.path.join(CACHE, "ortho.bmp"), "rb") as f:
+            iw, ih = struct.unpack_from("<ii", f.read(26), 18)
+        ih = abs(ih)
+        (au, bu, cu), (av, bv, cv) = m["uv"]
+        det = au * bv - bu * av
+        i11, i12, i21, i22 = bv / det, -bu / det, -av / det, au / det  # (u, v) - c -> (x, y)
+        cx, cy = i11 * -cu + i12 * (1 - cv), i21 * -cu + i22 * (1 - cv)  # pixel (0, 0) = u 0, v 1
+        mat = (k * i11 / iw, -k * i21 / iw, -k * i12 / ih, k * i22 / ih, k * (cx - m["x0"]), k * (m["y1"] - cy))
+        image = (f'<image href="cache/ortho.bmp" width="{iw}" height="{ih}" '
+                 f'transform="matrix({" ".join(f"{v:.6f}" for v in mat)})"/>')
+    else:
+        image = f'<image href="cache/ortho.bmp" width="{w}" height="{h}"/>'
     with open(path, "w") as f:
         f.write(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">'
-                f'<image href="cache/ortho.bmp" width="{w}" height="{h}"/>{"".join(el)}</svg>')
+                f'{image}{"".join(el)}</svg>')
 
 
 def write_mod(cfg, geo):

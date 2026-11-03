@@ -43,10 +43,12 @@
   "terrain_cell_m": 4.0,
   "ortho_margin_m": 50.0,
   "ortho_px_per_m": 12.0,
+  "ortho_near_margin_m": 8.0,
+  "ortho_near_px_per_m": 20.0,
 
   "placeholder": [
     "start_xy (point along the straight)", "kerb_width_m (default for kerbs without a measured width)", "kerb_min_curvature", "line_width_m",
-    "runoff_m", "grid_spacing_m (5 m per column, estimated)", "hotlap_back_m"
+    "runoff_m", "hotlap_back_m"
   ],
   "sources": [
     "length 800 m, width 7-10 m, 15 turns: https://kartodrom-gostyn.pl/tor/ (2026-10-17)",
@@ -55,7 +57,7 @@
     "race pace ~54 s/lap (20 laps, Monaco Extra 27.07.2026 onboard: youtube.com/watch?v=JqjP0Bvsnjk); apex tyres are single tyres lying flat",
     "tyre walls ~0.6 m (2-3 tyres, red/yellow), kerbs red/yellow painted: estimated from track photos + onboard videos (youtube.com/@kartodromgostyn)",
     "kerbs cross-checked on a drone photo from Sept 2025 (provided by the project author): all visible kerbs are modelled; outer kerbs from the old PZM track plan no longer exist",
-    "10 grid slots in two staggered columns: project author + PZM track plan; pit boxes placed on the grid slots",
+    "10 grid slots in two staggered columns: project author + PZM track plan; the 8 painted grid boxes (4 rows, ~7 m apart, columns 1.45 m staggered), the 4 grid lane lines and the chequered line traced on the orthophoto 2026-11-03 (features.json grid / painted_lines); slots 9-10 continue the painted rows; pit boxes placed on the grid slots",
     "kerb widths: measured on the orthophoto by build.py fit-kerbs (80th percentile per kerb), cross-checked on onboard videos",
     "asphalt grey, white edge lines: onboard videos (youtube.com/watch?v=ZrJTsDWJeKA, JqjP0Bvsnjk)",
     "elevation: GUGiK NMT (services.gugik.gov.pl/nmt), m a.s.l.",

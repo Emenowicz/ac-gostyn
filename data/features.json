@@ -1,6 +1,16 @@
 {
-  "_note": "on_kerb: tyres verified on the photo to lie on the kerb (apex markers). height: per-barrier override of wall_height_m (apex markers are single tyres lying flat, onboard video 27.07.2026). Kerb style: stripes (default, red/yellow), apron (red-dyed concrete pour with a light outer border, per the project author), concrete (plain grey concrete pour); both pours are raised 3 cm like a kerb but rumble less (own APRON surface). Kerbs start at the asphalt edge = the painted white edge line. extra_asphalt: any simple polygon. Traced by hand from the GUGiK orthophoto (build/cache/ortho.bmp) on a 5 m grid, ~0.5-1 m accuracy. Local metres (x east, y north) as in centerline.csv. Edit and re-run `build.py validate` - check build/ortho_overlay.svg.",
+  "_note": "on_kerb: tyres verified on the photo to lie on the kerb (apex markers). height: per-barrier override of wall_height_m (apex markers are single tyres lying flat, onboard video 27.07.2026). Kerb style: stripes (default, red/yellow), apron (red-dyed concrete pour with a light outer border, per the project author), concrete (plain grey concrete pour); both pours are raised 3 cm like a kerb but rumble less (own APRON surface). Kerbs start at the asphalt edge = the painted white edge line. extra_asphalt: any simple polygon. grid: the painted grid pattern relative to the start line (first row first_m before it, rows row_m apart, the second column stagger_m further back, lateral_m = lane centres left of the centreline; `painted` boxes are drawn, AC_START slots beyond continue the pattern). painted_lines: lane lines at a constant offset from the centreline, from_m..to_m before the start line (negative = after it). Both fitted to the orthophoto 2026-11-03 (residuals < 0.1 m, lanes 2.11 m apart). painted_cross: dashed lines across the asphalt at_m before the start line (the lanes end on one 4 m after it). Traced by hand from the GUGiK orthophoto (build/cache/ortho.bmp) on a 5 m grid, ~0.5-1 m accuracy. Local metres (x east, y north) as in centerline.csv. Edit and re-run `build.py validate` - check build/ortho_overlay.svg.",
   "start_finish": [[81.75, 36.9], [91.9, 35.5]],
+  "grid": {"first_m": 1.09, "row_m": 6.97, "stagger_m": 2.02, "lateral_m": [-2.33, 1.9], "painted": 8},
+  "painted_lines": [
+    {"name": "grid_lane_1", "offset": -3.38, "from_m": -4.0, "to_m": 40.0, "width": 0.1},
+    {"name": "grid_lane_2", "offset": -1.27, "from_m": -4.0, "to_m": 40.0, "width": 0.1},
+    {"name": "grid_lane_3", "offset": 0.84, "from_m": -4.0, "to_m": 40.0, "width": 0.1},
+    {"name": "grid_lane_4", "offset": 2.95, "from_m": -4.0, "to_m": 40.0, "width": 0.1}
+  ],
+  "painted_cross": [
+    {"name": "grid_lanes_end", "at_m": -4.0, "dash_m": 0.3, "gap_m": 0.2, "width": 0.12}
+  ],
   "barriers": [
     {"name": "paddock_fence", "points": [[57.2, 77.2], [57.2, 82.2], [59.4, 82.6], [71.3, 83.3], [78.8, 82.8], [88.1, 81.4]]},
     {"name": "paddock_west", "points": [[53.75, 90.0], [52.8, 83.1], [51.6, 75.6]]},
