@@ -11,6 +11,14 @@ from itertools import combinations
 
 UV_M = 4.0  # metres per texture tile
 GROUND_SINK_M = 0.05  # terrain sits below the drivable surfaces to avoid z-fighting
+# kerb "style" in features.json -> (AC object name = physics, material, raised by [m]). Painted kerbs drive as KERB;
+# the concrete pours (red or grey) are slightly raised like a kerb but rumble much less: own APRON surface
+# (project author). One object per material, so the two pours are 1APRON and 2APRON.
+KERB_STYLES = {"stripes": ("1KERB", "kerb", 0.0),  # red/yellow stripes, 0.5 m
+               "apron": ("1APRON", "kerb_apron", 0.03),  # red-dyed concrete band with a light outer border
+               "concrete": ("2APRON", "concrete", 0.03)}  # plain grey concrete
+KERB_OBJECTS = {name for name, _, _ in KERB_STYLES.values()}
+KERB_RAMP_M = 0.15  # a raised kerb climbs and drops over this width at both sides (no vertical step to catch a wheel)
 
 
 def load(track_path, csv_path):
@@ -230,16 +238,37 @@ def _in_poly(p, poly):
     return inside
 
 
+def _triangulate(poly):
+    """Ear clipping of a simple polygon (convex or not) -> counter-clockwise triangles."""
+    cross = lambda o, a, b: (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    pts = list(poly)
+    if sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1])) < 0:
+        pts.reverse()  # counter-clockwise -> faces point up
+    tris = []
+    while len(pts) > 3:
+        for i in range(len(pts)):
+            a, b, c = pts[i - 1], pts[i], pts[(i + 1) % len(pts)]
+            if cross(a, b, c) <= 1e-12:
+                continue  # reflex (or collinear) corner: not an ear
+            if any(cross(a, b, p) >= 0 and cross(b, c, p) >= 0 and cross(c, a, p) >= 0
+                   for p in pts if p not in (a, b, c)):
+                continue  # another corner inside: cutting here would overlap
+            tris.append((a, b, c))
+            del pts[i]
+            break
+        else:
+            raise ValueError(f"extra_asphalt polygon is not simple (self-intersecting?): {poly}")
+    return tris + [tuple(pts)]
+
+
 def _plate(poly, z_at, cell=1.0):
-    """Convex polygon fanned from its first corner, each fan triangle split into a k x k triangle grid (~`cell` m) so
-    the plate follows the ground instead of spanning it flat (the terrain between the corners would poke through).
-    One k for the whole plate, so the fan diagonals are split at the same points on both sides."""
-    if sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(poly, poly[1:] + poly[:1])) < 0:
-        poly = poly[::-1]  # counter-clockwise -> faces point up
-    fan = [(poly[0], poly[k], poly[k + 1]) for k in range(1, len(poly) - 1)]
-    k = max(1, math.ceil(max(math.dist(a, b) for t in fan for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0]))) / cell))
+    """Simple polygon, ear-clipped, each triangle split into a k x k triangle grid (~`cell` m) so the plate follows the
+    ground instead of spanning it flat (the terrain between the corners would poke through). One k for the whole plate,
+    so an edge shared by two triangles is split at the same points on both sides."""
+    tris = _triangulate(poly)
+    k = max(1, math.ceil(max(math.dist(a, b) for t in tris for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0]))) / cell))
     verts, faces = [], []
-    for a, b, c in fan:
+    for a, b, c in tris:
         idx = {}
         for i in range(k + 1):
             for j in range(k + 1 - i):
@@ -315,12 +344,12 @@ def build(cfg, pts, ground=None, features=None, photo=None):
         wall_off[side] = [ko + 0.1 if 0.85 * c - ko < 0.5 else min(max(h + kw + cfg["runoff_m"], ko + 0.5), 0.85 * c)
                           for h, ko, c in zip(half, kerb_out[side], caps[side])]
 
-    def rows(offs, dz=0.0):
+    def rows(offs, dz=0.0, u=None):  # u: fixed texture u for the whole row (kerbs: 0 = asphalt side, 1 = outer side)
         out = []
         for k in range(n + 1):  # row n duplicates row 0 at s=length, so UVs don't wrap at the seam
             i = k % n
             x, y, z = samples[i][0] + offs[i] * left[i][0], samples[i][1] + offs[i] * left[i][1], samples[i][2] + dz
-            out.append(((x, y, z), (offs[i] / UV_M, k * ds / UV_M)))
+            out.append(((x, y, z), (offs[i] / UV_M if u is None else u, k * ds / UV_M)))
         return out
 
     every = [True] * n
@@ -338,16 +367,34 @@ def build(cfg, pts, ground=None, features=None, photo=None):
                                   (a[i][0][1] + a[i + 1][0][1] + b[i][0][1] + b[i + 1][0][1]) / 4), pl) for pl in plates)
                 for i in range(n)]
 
-    kerbs, grass, outer = [], [], {}
+    klines = (features or {}).get("kerbs", [])
+    for k in klines:
+        if k.get("style", "stripes") not in KERB_STYLES:
+            raise ValueError(f"kerb {k['name']}: unknown style {k['style']!r} (one of {', '.join(KERB_STYLES)})")
+    style = {side: [klines[j].get("style", "stripes") if j is not None else "stripes" for j in ids]
+             for side, ids in kerb_id.items()}
+    kerbs, grass, outer = {s: [] for s in KERB_STYLES}, [], {}
     for side in (1, -1):
         edge = road_l if side == 1 else road_r
         ko = rows([side * o for o in kerb_out[side]])
         outer[side] = rows([side * o for o in wall_off[side]], -GROUND_SINK_M)  # run-off slopes down to the terrain
         flip = side < 0
-        kerbs.append(_strip(edge, ko, kerb[side], flip))
+        for s, (_, _, lift) in KERB_STYLES.items():
+            mask = [m and st == s for m, st in zip(kerb[side], style[side])]
+            if lift:  # cross-section: edge -> ramp up -> flat top -> ramp down -> outer edge (u 0 -> 1 across)
+                ramp = [min(KERB_RAMP_M, (o - h) / 3) for h, o in zip(half, kerb_out[side])]
+                prof = [rows([side * h for h in half], u=0.0),
+                        rows([side * (h + r) for h, r in zip(half, ramp)], lift, u=0.1),
+                        rows([side * (o - r) for o, r in zip(kerb_out[side], ramp)], lift, u=0.9),
+                        rows([side * o for o in kerb_out[side]], u=1.0)]
+                kerbs[s] += [_strip(a, b, mask, flip) for a, b in zip(prof, prof[1:])]
+            else:
+                kerbs[s].append(_strip(rows([side * h for h in half], u=0.0),
+                                       rows([side * o for o in kerb_out[side]], u=1.0), mask, flip))
         grass.append(_strip(edge, ko, [not m and f for m, f in zip(kerb[side], off_plate(edge, ko))], flip))
         grass.append(_strip(ko, outer[side], off_plate(ko, outer[side]), flip))
-    objects += [_merge("1KERB", "kerb", kerbs), _merge("1GRASS", "grass", grass)]
+    objects += [_merge(name, material, kerbs[s]) for s, (name, material, _) in KERB_STYLES.items()]
+    objects.append(_merge("1GRASS", "grass", grass))
 
     reach = [max(wall_off[1][i], wall_off[-1][i]) + 1.0 for i in range(n)]
     z_at = _ground_fn(samples, reach, ground)
@@ -528,7 +575,8 @@ def validate(cfg, pts, geo):
             errors.append(f"... {len(hits) - 5} more crossings")
 
     # barrier footprint (centre line +- half thickness) vs asphalt and kerbs; tyres on a kerb can be real (apex markers)
-    quads = {o["name"]: [[o["verts"][i] for i in f] for f in o["faces"]] for o in geo["objects"] if o["name"] in ("1ROAD", "1KERB")}
+    quads = {o["name"]: [[o["verts"][i] for i in f] for f in o["faces"]] for o in geo["objects"]
+             if o["name"] == "1ROAD" or o["name"] in KERB_OBJECTS}
     ht = cfg["wall_thickness_m"] / 2
 
     def inside(p, poly):
@@ -555,7 +603,7 @@ def validate(cfg, pts, geo):
                         on.add(surface)
         if "1ROAD" in on:
             errors.append(f"barrier {name} stands on the asphalt - move it in data/features.json")
-        elif "1KERB" in on and name not in geo.get("on_kerb", ()):
+        elif on & KERB_OBJECTS and name not in geo.get("on_kerb", ()):
             warnings.append(f"barrier {name} stands on a kerb - fine if the tyres really lie there (check the overlay)")
     for o in geo["objects"]:
         if len(o["verts"]) >= 65535:

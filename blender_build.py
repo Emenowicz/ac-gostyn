@@ -39,6 +39,8 @@ def material(name):
             img = bpy.data.images.new(name, 16, 16)
         if name == "ortho":
             pass
+        elif name == "kerb_apron":  # u across the kerb (0 = asphalt side): red band, then the white outer border
+            img.pixels = [c for y in range(16) for x in range(16) for c in (*(RED if x < 10 else COLORS["paint_white"]), 1.0)]
         elif name in STRIPES:
             count, axis = STRIPES[name]
             img.pixels = [c for y in range(16) for x in range(16)

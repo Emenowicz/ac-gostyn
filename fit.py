@@ -39,7 +39,8 @@ class Ortho:
 
 
 def classify(rgb):
-    """ponytail: fixed RGB thresholds tuned on the summer GUGiK orthophoto; retune if the imagery changes."""
+    """ponytail: fixed RGB thresholds tuned on the summer GUGiK orthophoto fetched 2026-10-17; retune if the imagery
+    changes. The WMS served different imagery on 2026-11-03: there dark verges pass as asphalt (+0.9 m width on `fit`)."""
     if rgb is None:
         return OTHER
     r, g, b = rgb

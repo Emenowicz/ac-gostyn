@@ -47,6 +47,9 @@ SURFACES = [  # ponytail: PLACEHOLDER physics, tune after the first drive
          VIBRATION_GAIN=0, VIBRATION_LENGTH=0),
     dict(KEY="KERB", FRICTION=0.92, DAMPING=0, DIRT_ADDITIVE=0, IS_VALID_TRACK=1, SIN_HEIGHT=0, SIN_LENGTH=0,
          VIBRATION_GAIN=1.0, VIBRATION_LENGTH=0.5),
+    # concrete pours (red and grey) beside the asphalt: slightly raised like a kerb, but rumble much less (project author)
+    dict(KEY="APRON", FRICTION=0.95, DAMPING=0, DIRT_ADDITIVE=0, IS_VALID_TRACK=1, SIN_HEIGHT=0, SIN_LENGTH=0,
+         VIBRATION_GAIN=0.3, VIBRATION_LENGTH=0.5),
     dict(KEY="GRASS", FRICTION=0.6, DAMPING=0.1, DIRT_ADDITIVE=1, IS_VALID_TRACK=0, SIN_HEIGHT=0.03, SIN_LENGTH=0.5,
          VIBRATION_GAIN=0.5, VIBRATION_LENGTH=0.3),
     dict(KEY="WALL", FRICTION=0.3, DAMPING=0, DIRT_ADDITIVE=0, IS_VALID_TRACK=0, SIN_HEIGHT=0, SIN_LENGTH=0,
@@ -307,10 +310,10 @@ def generate(cfg):
 
 
 def write_preview(geo, path):
-    colors = {"road": "#333", "kerb": "#d22", "grass": "#5a3", "wall": "#eee"}
+    colors = {"road": "#333", "kerb": "#d22", "kerb_apron": "#d22", "concrete": "#999", "grass": "#5a3", "wall": "#eee"}
     polys = []
     for o in geo["objects"]:
-        if o["material"] in colors:
+        if o["material"] in colors and o["name"] != "2WALL":  # the concrete perimeter wall would just frame the view
             for f in o["faces"]:
                 pts = " ".join(f"{o['verts'][i][0]:.1f},{-o['verts'][i][1]:.1f}" for i in f)
                 polys.append(f'<polygon points="{pts}" fill="{colors[o["material"]]}"/>')
@@ -345,10 +348,17 @@ def write_ortho_overlay(geo, pts, path):
     el = [line(geo["polylines"][key] , "#ff0") for key in ("road_l", "road_r")]
     el += [line(geo["polylines"][key], "#f0f", 1.5) for key in ("edge_l", "edge_r")]
     el += [line(b, "#0ff", 3) for b in geo["barriers"].values()]
+    kerb_colors = {"1KERB": "#f80", "1APRON": "#f00", "2APRON": "#ccc"}  # stripes / red concrete / grey concrete
     for o in geo["objects"]:
-        if o["name"] in ("1KERB", "2ROAD"):
-            color = "#f80" if o["name"] == "1KERB" else "#ff0"
-            el += [line([o["verts"][i] for i in f + f[:1]], color, 1.5) for f in o["faces"]]
+        if o["name"] in kerb_colors:
+            el += [line([o["verts"][i] for i in f + f[:1]], kerb_colors[o["name"]], 1.5) for f in o["faces"]]
+        elif o["name"] == "2ROAD":  # plates are a fine triangle grid: draw only their outline (edges of one face)
+            count = {}
+            for f in o["faces"]:
+                for a, b in zip(f, f[1:] + f[:1]):
+                    key = tuple(sorted((tuple(o["verts"][a][:2]), tuple(o["verts"][b][:2]))))
+                    count[key] = count.get(key, 0) + 1
+            el += [line(list(key), "#ff0", 1.5) for key, c in count.items() if c == 1]
     el += [f'<circle cx="{(x - m["x0"]) * k:.0f}" cy="{(m["y1"] - y) * k:.0f}" r="3" fill="#0ff"/>' for x, y, *_ in pts]
     for e in geo["empties"]:
         x, y, _ = e["pos"]

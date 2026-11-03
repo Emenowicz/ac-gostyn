@@ -84,9 +84,10 @@ build/ortho_overlay.svg                   model na ortofotomapie – otwórz w p
    |---|---|---|
    | `road` | `road.png` | asfalt, płyty dodatkowego asfaltu |
    | `kerb` | `kerb.png` | tarki (paski czerwono-żółte) |
+   | `kerb_apron` | `kerb_apron.png` | wylewki w stylu `apron` (czerwony beton z jasnym brzegiem, obiekt `1APRON`) |
    | `paint_white` | `paint_white.png` | białe linie krawędzi (obiekt `LINES_WHITE`, bez fizyki) |
    | `wall` | `wall.png` | bandy z opon |
-   | `concrete` | `concrete.png` | mur na brzegu terenu |
+   | `concrete` | `concrete.png` | mur na brzegu terenu, szare betonowe wylewki przy torze (obiekt `2APRON`) |
    | `ortho` | `ortho.png` | teren i pobocze (ortofotomapa) |
 
 4. Zapisz jako tor: File → Save kn5 → Track, pod nazwą `kartodrom_gostyn.kn5`, do folderu
@@ -130,7 +131,12 @@ w modelu. Po zmianie uruchom `python3 build.py validate` i obejrzyj `build/ortho
 | `data/track.json` | parametry; lista `placeholder` to wartości tymczasowe, `sources` to źródła danych |
 
 Współrzędne są w metrach względem punktu `origin_lat_lon` z `track.json`. Tarka powstaje tam, gdzie krawędź asfaltu
-leży bliżej niż `kerb_snap_m` od linii z `kerbs`; jej szerokość to `width` tej tarki (zmierzona przez `fit-kerbs`). Banda z `"on_kerb": true` może stać na tarce, a `"height"` nadpisuje jej wysokość (np. 0,25 m dla pojedynczej opony leżącej przy wierzchołku).
+leży bliżej niż `kerb_snap_m` od linii z `kerbs`; jej szerokość to `width` tej tarki (zmierzona przez `fit-kerbs`). Tarka zaczyna się
+na krawędzi asfaltu, a krawędź asfaltu to malowana biała linia. `"style"` tarki: `stripes` (domyślnie, paski czerwono-żółte),
+`apron` (wylewka z czerwonego betonu z jasnym brzegiem), `concrete` (szara betonowa wylewka). Obie wylewki są
+podniesione o 3 cm jak tarka i mają własną nawierzchnię `APRON` ze słabszą wibracją niż `KERB`.
+Banda z `"on_kerb": true` może stać na tarce, a `"height"` nadpisuje jej wysokość (np. 0,25 m dla pojedynczej opony leżącej przy wierzchołku).
+Płyta z `extra_asphalt` może być dowolnym wielokątem bez samoprzecięć.
 
 Ponowne pobranie danych źródłowych (zwykle niepotrzebne, wynik jest w repo):
 ```
@@ -142,6 +148,12 @@ python3 build.py fetch-elevation          # wysokości NMT GUGiK
 python3 build.py fit-kerbs                # szerokość każdej tarki zmierzona na ortofotomapie -> features.json
 ```
 `fit` i `import-osm` nadpisują `data/centerline.csv` – najpierw zacommituj zmiany.
+
+**Uwaga:** GUGiK wymienił zdjęcie w usłudze WMS. Klasyfikator kolorów w `fit.py` był dostrojony do ortofotomapy pobranej
+17.10.2026; na wersji z 3.11.2026 zalicza ciemne pobocza do asfaltu i `fit` daje tor szerszy o ok. 0,9 m. Przed ponownym
+`fit` lub `fit-kerbs` trzeba przestroić `classify()`. Obecne krawędzie w `centerline.csv` zgadzają się z białymi liniami na
+nowym zdjęciu (mediana odchyłki 2–4 cm); w kilku miejscach przesunięto je ręcznie na linię (patrz historia gita).
+`fit-kerbs` nadpisuje też szerokości tarek ustawione ręcznie.
 
 ## 7. Jak to działa
 
@@ -155,8 +167,8 @@ data/*.csv, *.json ──> trackgen.py ──> build/mesh.json ──> blender_b
 - `build.py` – wiersz poleceń: pobieranie danych, podglądy, pliki moda, uruchomienie Blendera.
 - `blender_build.py` – uruchamiany w Blenderze: obiekty, tekstury, punkty AC, eksport FBX.
 
-Obiekty w AC (pierwsza cyfra + nazwa nawierzchni = fizyka): `1ROAD`, `2ROAD`, `1KERB`, `1GRASS`, `2GRASS` (teren),
-`1WALL` (opony), `2WALL` (mur). Bez fizyki: `LINES_WHITE`. Punkty: `AC_START_0..9`, `AC_PIT_0..9`, `AC_TIME_0_L/R`, `AC_HOTLAP_START_0`.
+Obiekty w AC (pierwsza cyfra + nazwa nawierzchni = fizyka): `1ROAD`, `2ROAD` (płyty),
+`1APRON` i `2APRON` (czerwone i szare wylewki), `1KERB` (tarki w paski), `1GRASS`, `2GRASS` (teren), `1WALL` (opony), `2WALL` (mur). Bez fizyki: `LINES_WHITE`. Punkty: `AC_START_0..9`, `AC_PIT_0..9`, `AC_TIME_0_L/R`, `AC_HOTLAP_START_0`.
 
 ## 8. Do zrobienia
 

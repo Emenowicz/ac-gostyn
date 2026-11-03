@@ -42,6 +42,36 @@ grass = next(o for o in g2["objects"] if o["name"] == "1GRASS")
 on_plate = [f for f in grass["faces"] if all(R + 6.5 < grass["verts"][v][0] < R + 8.5 and abs(grass["verts"][v][1]) < 1.5 for v in f)]
 assert not on_plate, len(on_plate)
 assert trackgen._in_poly((1, 1), [(0, 0), (2, 0), (2, 2), (0, 2)]) and not trackgen._in_poly((3, 1), [(0, 0), (2, 0), (2, 2), (0, 2)])
+# concave plate (U shape): ear clipping covers exactly its area, all faces up, nothing in the notch
+u_shape = [(0, 0), (6, 0), (6, 4), (4, 4), (4, 1), (2, 1), (2, 4), (0, 4)]
+tris = trackgen._triangulate(u_shape)
+area = lambda a, b, c: ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / 2
+assert all(area(*t) > 0 for t in tris) and abs(sum(area(*t) for t in tris) - 18.0) < 1e-9, tris
+pv, pf, _ = trackgen._plate(u_shape, lambda x, y: 0.0)
+assert not any(trackgen._in_poly((sum(pv[i][0] for i in f) / 3, sum(pv[i][1] for i in f) / 3), [(2, 1), (4, 1), (4, 4), (2, 4)])
+               for f in pf)
+
+# kerb styles: each lands in its own object (physics), kerb UVs run 0 -> 1 across the kerb, unknown style = error
+for style, name in (("apron", "1APRON"), ("concrete", "2APRON"), ("stripes", "1KERB")):
+    feats["kerbs"][0]["style"] = style
+    g3 = trackgen.build(cfg, pts, None, feats)
+    objs = {o["name"]: o for o in g3["objects"]}
+    assert name in objs and not ({"1KERB", "1APRON", "2APRON"} - {name}) & set(objs), sorted(objs)
+    us = sorted({round(u, 6) for u, _ in objs[name]["uvs"]})
+    assert us[0] == 0.0 and us[-1] == 1.0, us
+    road_z = max(v[2] for v in objs["1ROAD"]["verts"])  # flat test track: road at z = 0
+    top = max(v[2] for v in objs[name]["verts"]) - road_z
+    if style != "stripes":  # concrete pours: raised 3 cm, ramps at both sides, edges stay at road level
+        assert abs(top - 0.03) < 1e-9 and min(v[2] for v in objs[name]["verts"]) == road_z, top
+    else:
+        assert abs(top) < 1e-9, top
+feats["kerbs"][0]["style"] = "zebra"
+try:
+    trackgen.build(cfg, pts, None, feats)
+    raise AssertionError("unknown kerb style accepted")
+except ValueError as e:
+    assert "zebra" in str(e)
+del feats["kerbs"][0]["style"]
 feats["barriers"].append({"name": "on_road", "points": [[R - 10, 1.0], [R + 10, 1.0]]})
 assert any("crosses on_road" in e for e in trackgen.validate(cfg, pts, trackgen.build(cfg, pts, None, feats))[0])
 
