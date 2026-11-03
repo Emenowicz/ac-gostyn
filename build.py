@@ -18,10 +18,12 @@ import math
 import os
 import shutil
 import statistics
+import struct
 import subprocess
 import sys
 import urllib.parse
 import urllib.request
+import zlib
 from datetime import date
 
 import fit
@@ -386,8 +388,9 @@ def write_mod(cfg, geo):
     lat, lon = cfg["origin_lat_lon"]
     ui = {
         "name": cfg["name"],
-        "description": f"Kartodrom Gostyń (built {cfg['year']}). Work in progress - geometry from OpenStreetMap, "
-                       "placeholder widths/elevation. Map data (c) OpenStreetMap contributors, ODbL.",
+        "description": f"Kartodrom Gostyń (built {cfg['year']}). Work in progress - centreline, widths, kerbs and "
+                       "tyre barriers measured on the GUGiK orthophoto, elevation from the GUGiK terrain model; physics "
+                       "placeholders. Orthophoto and terrain (c) GUGiK; initial centreline (c) OpenStreetMap contributors, ODbL.",
         "tags": ["karting", "circuit", "poland", "wip"],
         "geotags": [f"{lat:.5f}", f"{lon:.5f}"],
         "country": cfg["country"], "city": cfg["city"],
@@ -398,7 +401,40 @@ def write_mod(cfg, geo):
     }
     with open(os.path.join(track, "ui", "ui_track.json"), "w", encoding="utf-8") as f:
         json.dump(ui, f, ensure_ascii=False, indent=2)
+    write_outline(geo, os.path.join(track, "ui", "outline.png"))
     print(f"mod -> {os.path.relpath(track, ROOT)}  (add {cfg['folder']}.kn5 from ksEditor)")
+
+
+def write_outline(geo, path, size=600, line_px=9, ss=3):
+    """ui/outline.png for the AC menu: the centreline as a white line on transparency, north up, antialiased by
+    drawing at `ss` x and averaging. Pure stdlib (zlib PNG)."""
+    sm = geo["samples"]
+    xs, ys = [p[0] for p in sm], [p[1] for p in sm]
+    big, margin = size * ss, 0.06 * size * ss
+    k = (big - 2 * margin) / max(max(xs) - min(xs), max(ys) - min(ys))
+    ox = (big - k * (max(xs) - min(xs))) / 2 - k * min(xs)
+    oy = (big - k * (max(ys) - min(ys))) / 2 + k * max(ys)
+    r = line_px * ss / 2
+    cover = bytearray(big * big)
+    for a, b in zip(sm, sm[1:] + sm[:1]):  # stamp discs along each segment
+        (ax, ay), (bx, by) = (ox + k * a[0], oy - k * a[1]), (ox + k * b[0], oy - k * b[1])
+        steps = max(1, int(math.dist((ax, ay), (bx, by)) / (r / 2)))
+        for s in range(steps + 1):
+            cx, cy = ax + (bx - ax) * s / steps, ay + (by - ay) * s / steps
+            for py in range(max(0, int(cy - r)), min(big, int(cy + r) + 1)):
+                for px in range(max(0, int(cx - r)), min(big, int(cx + r) + 1)):
+                    if (px - cx) ** 2 + (py - cy) ** 2 <= r * r:
+                        cover[py * big + px] = 1
+    raw = bytearray()
+    for y in range(size):
+        raw.append(0)
+        for x in range(size):
+            a = sum(cover[(y * ss + j) * big + x * ss + i] for j in range(ss) for i in range(ss)) * 255 // (ss * ss)
+            raw += bytes((255, 255, 255, a))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
 
 
 def blender_exe():
@@ -411,8 +447,10 @@ def blender_exe():
 def export_fbx(cfg):
     out = os.path.join(BUILD, "fbx", cfg["folder"] + ".fbx")
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    cmd = [blender_exe(), "-b", "--factory-startup", "-P", os.path.join(ROOT, "blender_build.py"), "--",
-           os.path.join(BUILD, "mesh.json"), out]
+    preview = os.path.join(BUILD, "content", "tracks", cfg["folder"], "ui", "preview.png")
+    # --python-exit-code: a Python error in the script must fail the build (Blender otherwise exits 0)
+    cmd = [blender_exe(), "-b", "--factory-startup", "--python-exit-code", "1", "-P", os.path.join(ROOT, "blender_build.py"),
+           "--", os.path.join(BUILD, "mesh.json"), out, preview]
     subprocess.run(cmd, check=True)
     print(f"fbx -> {os.path.relpath(out, ROOT)}")
 

@@ -1,13 +1,14 @@
 """Runs inside Blender: build/mesh.json -> objects, materials, AC empties -> FBX for ksEditor (+ .blend to inspect).
 
-blender -b --factory-startup -P blender_build.py -- build/mesh.json build/fbx/track.fbx
+blender -b --factory-startup -P blender_build.py -- build/mesh.json build/fbx/track.fbx [ui/preview.png]
+(the optional third path renders the AC menu preview after the export)
 """
 import json
 import os
 import sys
 
 import bpy
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 
 src, out = sys.argv[sys.argv.index("--") + 1:][:2]
 with open(src) as f:
@@ -98,3 +99,29 @@ bpy.ops.export_scene.fbx(
     embed_textures=False,
 )
 print(f"exported {len(data['objects'])} meshes, {len(data['empties'])} empties -> {out}")
+
+preview = sys.argv[sys.argv.index("--") + 1:][2:3]
+if preview:  # ui/preview.png for the AC menu: textured aerial view, camera fitted to the asphalt
+    import math
+    from mathutils import Euler
+    scene.render.engine = "BLENDER_WORKBENCH"
+    scene.display.shading.light, scene.display.shading.color_type = "STUDIO", "TEXTURE"
+    scene.render.resolution_x, scene.render.resolution_y, scene.render.resolution_percentage = 1024, 576, 100
+    scene.render.image_settings.file_format = "PNG"
+    scene.world = bpy.data.worlds.new("sky")
+    scene.world.color = (0.55, 0.65, 0.8)
+    cam = bpy.data.objects.new("preview_cam", bpy.data.cameras.new("preview_cam"))
+    cam.data.lens, cam.data.clip_end = 35, 5000
+    scene.collection.objects.link(cam)
+    scene.camera = cam
+    cam.rotation_euler = Euler((math.radians(40), 0, math.radians(20)))  # oblique, from the south-south-west
+    road = [v for o in data["objects"] if o["name"] == "1ROAD" for v in o["verts"]]
+    lo = [min(v[k] for v in road) for k in range(3)]
+    hi = [max(v[k] for v in road) for k in range(3)]
+    corners = [Vector((x, y, z)) for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+    loc, _ = cam.camera_fit_coords(bpy.context.evaluated_depsgraph_get(), [c for p in corners for c in p])
+    cam.location = loc - (cam.matrix_world.to_3x3() @ Vector((0, 0, -1))) * 12.0  # a little margin around the track
+    scene.render.filepath = os.path.abspath(preview[0])
+    os.makedirs(os.path.dirname(scene.render.filepath), exist_ok=True)
+    bpy.ops.render.render(write_still=True)
+    print(f"preview -> {preview[0]}")

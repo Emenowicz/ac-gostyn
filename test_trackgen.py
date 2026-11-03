@@ -65,6 +65,21 @@ for style, name in (("apron", "1APRON"), ("concrete", "2APRON"), ("stripes", "1K
         assert abs(top - 0.03) < 1e-9 and min(v[2] for v in objs[name]["verts"]) == road_z, top
     else:
         assert abs(top) < 1e-9, top
+# raised kerbs ramp up from 0 at both ends of every run (also across the seam), full lift after ramp_m
+up = trackgen._end_taper([False, True, True, True, True, False, False, False], 0.03, 1.0, 1.5)
+assert up[1] == 0.0 and up[5] == 0.0 and abs(up[2] - 0.02) < 1e-9 and abs(up[3] - 0.03) < 1e-9 and up[7] == 0.0, up
+seam = trackgen._end_taper([True, True, False, False, False, False, True, True], 0.03, 1.0, 0.5)
+assert seam[0] == 0.03 and seam[2] == 0.0 and seam[6] == 0.0 and seam[7] == 0.03, seam
+
+# terrain: explicit triangles, and its height function lies exactly on them (run-off edge, plates, walls use it)
+mesh, hz = trackgen._terrain_grid(lambda x, y: 0.1 * x + 0.02 * x * y, (0.0, 0.0, 8.0, 8.0), 4.0)
+tv, tf, _ = mesh()
+assert all(len(f) == 3 for f in tf) and len(tf) == 2 * 3 * 3, len(tf)
+for f in tf:
+    (ax, ay, az), (bx, by, bz), (cx, cy, cz) = (tv[i] for i in f)
+    px, py = (ax + bx + cx) / 3, (ay + by + cy) / 3
+    assert abs(hz(px, py) - (az + bz + cz) / 3) < 1e-9
+
 feats["kerbs"][0]["style"] = "zebra"
 try:
     trackgen.build(cfg, pts, None, feats)

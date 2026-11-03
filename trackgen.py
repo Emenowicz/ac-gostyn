@@ -19,6 +19,7 @@ KERB_STYLES = {"stripes": ("1KERB", "kerb", 0.0),  # red/yellow stripes, 0.5 m
                "concrete": ("2APRON", "concrete", 0.03)}  # plain grey concrete
 KERB_OBJECTS = {name for name, _, _ in KERB_STYLES.values()}
 KERB_RAMP_M = 0.15  # a raised kerb climbs and drops over this width at both sides (no vertical step to catch a wheel)
+KERB_END_RAMP_M = 0.6  # ... and over this length where it starts and ends along the track
 
 
 def load(track_path, csv_path):
@@ -149,6 +150,23 @@ def _strip(rows_a, rows_b, mask, flip):
     return verts, faces, uvs
 
 
+def _end_taper(mask, lift, ds, ramp_m):
+    """Per-sample lift of a raised kerb along its quads `mask` (circular): 0 at both ends of every run, full `lift`
+    after `ramp_m`, so the kerb doesn't start with a step (and an open end you can see under)."""
+    n = len(mask)
+    on = [mask[r - 1] or mask[r] for r in range(n)]  # row r joins quads r-1 and r
+    end = [mask[r - 1] != mask[r] for r in range(n)]
+    if not any(end):
+        return [lift if on[0] else 0.0] * n
+    d = [0 if end[r] or not on[r] else n for r in range(n)]  # rows from the nearest end of the run
+    for _ in range(2):  # twice round, for runs across the seam
+        for r in range(n):
+            d[r] = min(d[r], d[r - 1] + 1)
+        for r in reversed(range(n)):
+            d[r] = min(d[r], d[(r + 1) % n] + 1)
+    return [lift * min(1.0, d[r] * ds / ramp_m) if on[r] else 0.0 for r in range(n)]
+
+
 def _merge(name, material, parts):
     verts, faces, uvs = [], [], []
     for v, f, uv in parts:
@@ -193,13 +211,37 @@ def _ground_fn(samples, reach, ground):
     return z_at
 
 
-def _terrain(z_at, extent, cell):
+def _terrain_grid(z_at, extent, cell):
+    """Terrain mesh on a `cell` grid and its exact height function.
+
+    Each cell is split into two triangles along the same diagonal ((i, j)-(i+1, j+1)), written out as triangles so
+    no exporter or ksEditor picks the diagonal: the run-off edge, plates and barrier feet can then sit exactly on it.
+    """
     x0, y0, x1, y1 = extent
     nx, ny = int((x1 - x0) / cell) + 1, int((y1 - y0) / cell) + 1
-    verts = [(x0 + i * cell, y0 + j * cell, z_at(x0 + i * cell, y0 + j * cell)) for j in range(ny + 1) for i in range(nx + 1)]
-    faces = [[j * (nx + 1) + i, j * (nx + 1) + i + 1, (j + 1) * (nx + 1) + i + 1, (j + 1) * (nx + 1) + i]
-             for j in range(ny) for i in range(nx)]
-    return verts, faces, [(v[0] / UV_M, v[1] / UV_M) for v in verts]
+    zs = {}
+
+    def zv(i, j):
+        if (i, j) not in zs:
+            zs[i, j] = z_at(x0 + i * cell, y0 + j * cell)
+        return zs[i, j]
+
+    def height(x, y):
+        fx, fy = (x - x0) / cell, (y - y0) / cell
+        i, j = min(max(math.floor(fx), 0), nx - 1), min(max(math.floor(fy), 0), ny - 1)
+        tx, ty = fx - i, fy - j
+        z00, z10, z01, z11 = zv(i, j), zv(i + 1, j), zv(i, j + 1), zv(i + 1, j + 1)
+        if tx >= ty:  # triangle (00, 10, 11)
+            return z00 + tx * (z10 - z00) + ty * (z11 - z10)
+        return z00 + tx * (z11 - z01) + ty * (z01 - z00)  # triangle (00, 11, 01)
+
+    def mesh():
+        verts = [(x0 + i * cell, y0 + j * cell, zv(i, j)) for j in range(ny + 1) for i in range(nx + 1)]
+        v = lambda i, j: j * (nx + 1) + i
+        faces = [f for j in range(ny) for i in range(nx)
+                 for f in ([v(i, j), v(i + 1, j), v(i + 1, j + 1)], [v(i, j), v(i + 1, j + 1), v(i, j + 1)])]
+        return verts, faces, [(p[0] / UV_M, p[1] / UV_M) for p in verts]
+    return mesh, height
 
 
 def _barrier(points, z_at, height, thick):
@@ -344,11 +386,14 @@ def build(cfg, pts, ground=None, features=None, photo=None):
         wall_off[side] = [ko + 0.1 if 0.85 * c - ko < 0.5 else min(max(h + kw + cfg["runoff_m"], ko + 0.5), 0.85 * c)
                           for h, ko, c in zip(half, kerb_out[side], caps[side])]
 
-    def rows(offs, dz=0.0, u=None):  # u: fixed texture u for the whole row (kerbs: 0 = asphalt side, 1 = outer side)
+    def rows(offs, dz=0.0, u=None, zfn=None):
+        """Row of (pos, uv) at lateral offsets `offs`. dz: scalar or per-sample list; u: fixed texture u for the whole
+        row (kerbs: 0 = asphalt side, 1 = outer side); zfn(x, y): height from a function instead of the track's."""
         out = []
         for k in range(n + 1):  # row n duplicates row 0 at s=length, so UVs don't wrap at the seam
             i = k % n
-            x, y, z = samples[i][0] + offs[i] * left[i][0], samples[i][1] + offs[i] * left[i][1], samples[i][2] + dz
+            x, y = samples[i][0] + offs[i] * left[i][0], samples[i][1] + offs[i] * left[i][1]
+            z = (zfn(x, y) if zfn else samples[i][2]) + (dz[i] if isinstance(dz, list) else dz)
             out.append(((x, y, z), (offs[i] / UV_M if u is None else u, k * ds / UV_M)))
         return out
 
@@ -362,10 +407,24 @@ def build(cfg, pts, ground=None, features=None, photo=None):
     objects.append(_merge("LINES_WHITE", "paint_white", edge_lines))
     plates = [p["points"] for p in (features or {}).get("extra_asphalt", [])]
 
-    def off_plate(a, b):  # run-off quads i..i+1 between rows a and b, dropped where an extra-asphalt plate lies
-        return [not any(_in_poly(((a[i][0][0] + a[i + 1][0][0] + b[i][0][0] + b[i + 1][0][0]) / 4,
-                                  (a[i][0][1] + a[i + 1][0][1] + b[i][0][1] + b[i + 1][0][1]) / 4), pl) for pl in plates)
-                for i in range(n)]
+    # the terrain comes first: the run-off's outer edge, the plates and the barrier feet sit exactly on it
+    reach = [max(wall_off[1][i], wall_off[-1][i]) + 1.0 for i in range(n)]
+    z_at = _ground_fn(samples, reach, ground)
+    outer_xy = {side: [p[:2] for p, _ in rows([side * o for o in wall_off[side]])] for side in (1, -1)}
+    if features:
+        barriers = {b["name"]: [tuple(p) for p in b["points"]] for b in features.get("barriers", [])}
+    else:  # no traced barriers: a wall along the outer edge of the run-off on both sides
+        barriers = {f"auto_{'l' if side == 1 else 'r'}": outer_xy[side] for side in (1, -1)}
+    pts_all = [p[:2] for line in list(outer_xy.values()) + list(barriers.values()) for p in line]
+    m = cfg["terrain_margin_m"]
+    extent = ((photo["x0"], photo["y0"], photo["x1"], photo["y1"]) if photo else
+              (min(p[0] for p in pts_all) - m, min(p[1] for p in pts_all) - m,
+               max(p[0] for p in pts_all) + m, max(p[1] for p in pts_all) + m))
+    terrain_mesh, ground_z = _terrain_grid(z_at, extent, cfg["terrain_cell_m"])
+
+    def off_plate(a, b):  # run-off quads i..i+1 between rows a and b, dropped only where they lie wholly on a plate
+        return [not any(all(_in_poly(p[0], pl) for p in (a[i], a[i + 1], b[i], b[i + 1])) for pl in plates)
+                for i in range(n)]  # (a quad only partly on a plate would leave a hole down to the terrain)
 
     klines = (features or {}).get("kerbs", [])
     for k in klines:
@@ -377,15 +436,16 @@ def build(cfg, pts, ground=None, features=None, photo=None):
     for side in (1, -1):
         edge = road_l if side == 1 else road_r
         ko = rows([side * o for o in kerb_out[side]])
-        outer[side] = rows([side * o for o in wall_off[side]], -GROUND_SINK_M)  # run-off slopes down to the terrain
+        outer[side] = rows([side * o for o in wall_off[side]], zfn=ground_z)  # run-off slopes down onto the terrain
         flip = side < 0
         for s, (_, _, lift) in KERB_STYLES.items():
             mask = [m and st == s for m, st in zip(kerb[side], style[side])]
             if lift:  # cross-section: edge -> ramp up -> flat top -> ramp down -> outer edge (u 0 -> 1 across)
                 ramp = [min(KERB_RAMP_M, (o - h) / 3) for h, o in zip(half, kerb_out[side])]
+                up = _end_taper(mask, lift, ds, KERB_END_RAMP_M)  # and along the track: no step where it starts/ends
                 prof = [rows([side * h for h in half], u=0.0),
-                        rows([side * (h + r) for h, r in zip(half, ramp)], lift, u=0.1),
-                        rows([side * (o - r) for o, r in zip(kerb_out[side], ramp)], lift, u=0.9),
+                        rows([side * (h + r) for h, r in zip(half, ramp)], up, u=0.1),
+                        rows([side * (o - r) for o, r in zip(kerb_out[side], ramp)], up, u=0.9),
                         rows([side * o for o in kerb_out[side]], u=1.0)]
                 kerbs[s] += [_strip(a, b, mask, flip) for a, b in zip(prof, prof[1:])]
             else:
@@ -396,37 +456,16 @@ def build(cfg, pts, ground=None, features=None, photo=None):
     objects += [_merge(name, material, kerbs[s]) for s, (name, material, _) in KERB_STYLES.items()]
     objects.append(_merge("1GRASS", "grass", grass))
 
-    reach = [max(wall_off[1][i], wall_off[-1][i]) + 1.0 for i in range(n)]
-    z_at = _ground_fn(samples, reach, ground)
     edge_lines = {side: [p for p, _ in outer[side]] for side in (1, -1)}
-    if features:
-        barriers = {b["name"]: [tuple(p) for p in b["points"]] for b in features.get("barriers", [])}
-    else:  # no traced barriers: a wall along the outer edge of the run-off on both sides
-        barriers = {f"auto_{'l' if side == 1 else 'r'}": [p[:2] for p in edge_lines[side]] for side in (1, -1)}
-    pts_all = [p[:2] for line in list(edge_lines.values()) + list(barriers.values()) for p in line]
-    m = cfg["terrain_margin_m"]
-    extent = ((photo["x0"], photo["y0"], photo["x1"], photo["y1"]) if photo else
-              (min(p[0] for p in pts_all) - m, min(p[1] for p in pts_all) - m,
-               max(p[0] for p in pts_all) + m, max(p[1] for p in pts_all) + m))
     heights = {b["name"]: b.get("height", cfg["wall_height_m"]) for b in (features or {}).get("barriers", [])}
     walls = [part for name, line in barriers.items()
-             for part in _barrier(line, z_at, heights.get(name, cfg["wall_height_m"]), cfg["wall_thickness_m"])]
+             for part in _barrier(line, ground_z, heights.get(name, cfg["wall_height_m"]), cfg["wall_thickness_m"])]
     x0, y0, x1, y1 = (v + d for v, d in zip(extent, (1, 1, -1, -1)))  # perimeter, so nobody drives off the world
     objects.append(_merge("1WALL", "wall", walls))
-    objects.append(_merge("2WALL", "concrete", _barrier([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], z_at, 2.0, 0.5)))
-    if plates:
-        cell = cfg["terrain_cell_m"]
-
-        def z_top(x, y):  # z_at, or the terrain mesh where its flat cells bulge above it (either diagonal split)
-            i, j = math.floor((x - extent[0]) / cell), math.floor((y - extent[1]) / cell)
-            gx, gy = extent[0] + i * cell, extent[1] + j * cell
-            tx, ty = (x - gx) / cell, (y - gy) / cell
-            z00, z10, z01, z11 = (z_at(gx + a * cell, gy + b * cell) for a, b in ((0, 0), (1, 0), (0, 1), (1, 1)))
-            d1 = z00 + tx * (z10 - z00) + ty * (z11 - z10) if tx >= ty else z00 + tx * (z11 - z01) + ty * (z01 - z00)
-            d2 = z00 + tx * (z10 - z00) + ty * (z01 - z00) if tx + ty <= 1 else z11 + (1 - tx) * (z01 - z11) + (1 - ty) * (z10 - z11)
-            return max(z_at(x, y), d1, d2)
-        objects.append(_merge("2ROAD", "road", [_plate(pl, z_top) for pl in plates]))
-    objects.append(_merge("2GRASS", "ground", [_terrain(z_at, extent, cfg["terrain_cell_m"])]))
+    objects.append(_merge("2WALL", "concrete", _barrier([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], ground_z, 2.0, 0.5)))
+    if plates:  # on the terrain mesh, or on z_at where that is higher (under the track asphalt they overlap)
+        objects.append(_merge("2ROAD", "road", [_plate(pl, lambda x, y: max(z_at(x, y), ground_z(x, y))) for pl in plates]))
+    objects.append(_merge("2GRASS", "ground", [terrain_mesh()]))
     objects = [o for o in objects if o["faces"]]
     if photo:  # orthophoto draped over the terrain and the run-off grass: planar UVs over the photo's extent
         x0, y0, x1, y1 = extent

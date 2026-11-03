@@ -60,7 +60,8 @@ Wynik w `build/`:
 build/fbx/kartodrom_gostyn.fbx            model dla ksEditor
 build/fbx/texture/*.png                   tekstury (ortho.png = ortofotomapa 4096², ok. 16 MB)
 build/fbx/kartodrom_gostyn.blend          ten sam model do obejrzenia w Blenderze
-build/content/tracks/kartodrom_gostyn/    folder moda: models.ini, data/surfaces.ini, ui/ui_track.json
+build/content/tracks/kartodrom_gostyn/    folder moda: models.ini, data/surfaces.ini, ui/ui_track.json,
+                                          ui/preview.png (widok z lotu ptaka, render Blendera), ui/outline.png (zarys)
 build/preview.svg                         podgląd z góry
 build/ortho_overlay.svg                   model na ortofotomapie – otwórz w przeglądarce, żeby sprawdzić dane
 ```
@@ -174,7 +175,7 @@ Obiekty w AC (pierwsza cyfra + nazwa nawierzchni = fizyka): `1ROAD`, `2ROAD` (p�
 
 - strojenie fizyki po pierwszym przejeździe (cel: 50–52 s);
 - linia AI (`ai/fast_lane.ai`, nagrywana w grze);
-- mapa toru, obrazki do menu (`ui/preview.png`, `ui/outline.png`), kamery do powtórek;
+- mapa toru do gry (`map.png` + `data/map.ini`), kamery do powtórek;
 - tekstura asfaltu (łaty, pęknięcia), linie pól startowych, pachołki przy wierzchołkach, budynki i drzewa.
 
 ## Źródła danych i licencje
