@@ -221,6 +221,40 @@ def _barrier(points, z_at, height, thick):
             _strip(rows[-1, True], rows[1, True], every, False)]
 
 
+def _in_poly(p, poly):
+    """Point-in-polygon (even-odd ray crossing)."""
+    x, y, inside = p[0], p[1], False
+    for (ax, ay), (bx, by) in zip(poly, poly[1:] + poly[:1]):
+        if (ay > y) != (by > y) and x < ax + (y - ay) * (bx - ax) / (by - ay):
+            inside = not inside
+    return inside
+
+
+def _plate(poly, z_at, cell=1.0):
+    """Convex polygon fanned from its first corner, each fan triangle split into a k x k triangle grid (~`cell` m) so
+    the plate follows the ground instead of spanning it flat (the terrain between the corners would poke through).
+    One k for the whole plate, so the fan diagonals are split at the same points on both sides."""
+    if sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(poly, poly[1:] + poly[:1])) < 0:
+        poly = poly[::-1]  # counter-clockwise -> faces point up
+    fan = [(poly[0], poly[k], poly[k + 1]) for k in range(1, len(poly) - 1)]
+    k = max(1, math.ceil(max(math.dist(a, b) for t in fan for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0]))) / cell))
+    verts, faces = [], []
+    for a, b, c in fan:
+        idx = {}
+        for i in range(k + 1):
+            for j in range(k + 1 - i):
+                x = a[0] + i / k * (b[0] - a[0]) + j / k * (c[0] - a[0])
+                y = a[1] + i / k * (b[1] - a[1]) + j / k * (c[1] - a[1])
+                idx[i, j] = len(verts)
+                verts.append((x, y, z_at(x, y) + GROUND_SINK_M - 0.02))  # just under the main asphalt where they overlap
+        for i in range(k):
+            for j in range(k - i):
+                faces.append([idx[i, j], idx[i + 1, j], idx[i, j + 1]])
+                if i + j < k - 1:
+                    faces.append([idx[i + 1, j], idx[i + 1, j + 1], idx[i, j + 1]])
+    return verts, faces, [(x / UV_M, y / UV_M) for x, y, _ in verts]
+
+
 def _dist_to_polyline(p, line):
     best = math.inf
     for a, b in zip(line, line[1:]):
@@ -297,6 +331,13 @@ def build(cfg, pts, ground=None, features=None, photo=None):
     edge_lines = [_strip(rows([side * (h - lw - 0.05) for h in half], lift), rows([side * (h - 0.05) for h in half], lift),
                          every, side < 0) for side in (1, -1)]
     objects.append(_merge("LINES_WHITE", "paint_white", edge_lines))
+    plates = [p["points"] for p in (features or {}).get("extra_asphalt", [])]
+
+    def off_plate(a, b):  # run-off quads i..i+1 between rows a and b, dropped where an extra-asphalt plate lies
+        return [not any(_in_poly(((a[i][0][0] + a[i + 1][0][0] + b[i][0][0] + b[i + 1][0][0]) / 4,
+                                  (a[i][0][1] + a[i + 1][0][1] + b[i][0][1] + b[i + 1][0][1]) / 4), pl) for pl in plates)
+                for i in range(n)]
+
     kerbs, grass, outer = [], [], {}
     for side in (1, -1):
         edge = road_l if side == 1 else road_r
@@ -304,8 +345,8 @@ def build(cfg, pts, ground=None, features=None, photo=None):
         outer[side] = rows([side * o for o in wall_off[side]], -GROUND_SINK_M)  # run-off slopes down to the terrain
         flip = side < 0
         kerbs.append(_strip(edge, ko, kerb[side], flip))
-        grass.append(_strip(edge, ko, [not m for m in kerb[side]], flip))
-        grass.append(_strip(ko, outer[side], every, flip))
+        grass.append(_strip(edge, ko, [not m and f for m, f in zip(kerb[side], off_plate(edge, ko))], flip))
+        grass.append(_strip(ko, outer[side], off_plate(ko, outer[side]), flip))
     objects += [_merge("1KERB", "kerb", kerbs), _merge("1GRASS", "grass", grass)]
 
     reach = [max(wall_off[1][i], wall_off[-1][i]) + 1.0 for i in range(n)]
@@ -326,15 +367,18 @@ def build(cfg, pts, ground=None, features=None, photo=None):
     x0, y0, x1, y1 = (v + d for v, d in zip(extent, (1, 1, -1, -1)))  # perimeter, so nobody drives off the world
     objects.append(_merge("1WALL", "wall", walls))
     objects.append(_merge("2WALL", "concrete", _barrier([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], z_at, 2.0, 0.5)))
-    if features and features.get("extra_asphalt"):
-        parts = []
-        for poly in features["extra_asphalt"]:  # convex polygons, fanned; just under the main asphalt where they overlap
-            pts2 = poly["points"]
-            if sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts2, pts2[1:] + pts2[:1])) < 0:
-                pts2 = pts2[::-1]  # counter-clockwise -> faces point up
-            v = [(x, y, z_at(x, y) + GROUND_SINK_M - 0.02) for x, y in pts2]
-            parts.append((v, [[0, k, k + 1] for k in range(1, len(v) - 1)], [(x / UV_M, y / UV_M) for x, y, _ in v]))
-        objects.append(_merge("2ROAD", "road", parts))
+    if plates:
+        cell = cfg["terrain_cell_m"]
+
+        def z_top(x, y):  # z_at, or the terrain mesh where its flat cells bulge above it (either diagonal split)
+            i, j = math.floor((x - extent[0]) / cell), math.floor((y - extent[1]) / cell)
+            gx, gy = extent[0] + i * cell, extent[1] + j * cell
+            tx, ty = (x - gx) / cell, (y - gy) / cell
+            z00, z10, z01, z11 = (z_at(gx + a * cell, gy + b * cell) for a, b in ((0, 0), (1, 0), (0, 1), (1, 1)))
+            d1 = z00 + tx * (z10 - z00) + ty * (z11 - z10) if tx >= ty else z00 + tx * (z11 - z01) + ty * (z01 - z00)
+            d2 = z00 + tx * (z10 - z00) + ty * (z01 - z00) if tx + ty <= 1 else z11 + (1 - tx) * (z01 - z11) + (1 - ty) * (z10 - z11)
+            return max(z_at(x, y), d1, d2)
+        objects.append(_merge("2ROAD", "road", [_plate(pl, z_top) for pl in plates]))
     objects.append(_merge("2GRASS", "ground", [_terrain(z_at, extent, cfg["terrain_cell_m"])]))
     objects = [o for o in objects if o["faces"]]
     if photo:  # orthophoto draped over the terrain and the run-off grass: planar UVs over the photo's extent

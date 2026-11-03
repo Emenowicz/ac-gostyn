@@ -34,6 +34,14 @@ assert 0 < len(kerb["faces"]) < 20 and all(v[1] > R - 10 for v in kerb["verts"])
 gates = {e["name"]: e["pos"] for e in g2["empties"] if e["name"].startswith("AC_TIME")}
 assert abs(gates["AC_TIME_0_L"][0] - (R - 5.5)) < 0.01 and abs(gates["AC_TIME_0_R"][0] - (R + 5.5)) < 0.01, gates
 assert any(o["name"] == "2ROAD" for o in g2["objects"])
+# the plate follows the ground on a ~1 m grid and the run-off grass makes way for it
+plate = next(o for o in g2["objects"] if o["name"] == "2ROAD")
+assert len(plate["faces"]) > 20 and all(math.dist(plate["verts"][f[0]][:2], plate["verts"][f[1]][:2]) <= 1.01
+                                        for f in plate["faces"]), len(plate["faces"])
+grass = next(o for o in g2["objects"] if o["name"] == "1GRASS")
+on_plate = [f for f in grass["faces"] if all(R + 6.5 < grass["verts"][v][0] < R + 8.5 and abs(grass["verts"][v][1]) < 1.5 for v in f)]
+assert not on_plate, len(on_plate)
+assert trackgen._in_poly((1, 1), [(0, 0), (2, 0), (2, 2), (0, 2)]) and not trackgen._in_poly((3, 1), [(0, 0), (2, 0), (2, 2), (0, 2)])
 feats["barriers"].append({"name": "on_road", "points": [[R - 10, 1.0], [R + 10, 1.0]]})
 assert any("crosses on_road" in e for e in trackgen.validate(cfg, pts, trackgen.build(cfg, pts, None, feats))[0])
 
