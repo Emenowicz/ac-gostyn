@@ -171,12 +171,15 @@ def ks_persistence(details):
         else:
             mats[name] = ("ksPerPixel", vals, {"txDiffuse": f"{name}.png"})
     meshes = [o["name"] for o in data["objects"]]
+    no_shadow = [m for m in meshes if any(k in m for k in FLAT_GROUND) or m == "1WALL"]
     text = persistence.fbx_ini(
         os.path.basename(out), mats, meshes, [e["name"] for e in data["empties"]],
-        date=datetime.datetime.now().strftime("%m/%d/%Y %I:%M:%S %p"),
-        no_shadow=[m for m in meshes if any(k in m for k in FLAT_GROUND) or m == "1WALL"])
+        date=datetime.datetime.now().strftime("%m/%d/%Y %I:%M:%S %p"), no_shadow=no_shadow)
     with open(os.path.abspath(out) + ".ini", "w", newline="") as f:
         f.write(text)
+    # the same settings for kn5.py, which writes the KN5 itself (no ksEditor needed)
+    with open(os.path.splitext(os.path.abspath(out))[0] + ".materials.json", "w", encoding="utf-8") as f:
+        json.dump({"materials": mats, "no_shadow": no_shadow}, f, indent=1)
     print(f"ksEditor persistence -> {out}.ini ({len(mats)} materials)")
 
 

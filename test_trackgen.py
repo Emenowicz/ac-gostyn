@@ -241,4 +241,31 @@ try:
 except AssertionError as e:
     assert "has no" in str(e), e
 
+# KN5 writer: a one-quad track + a start dummy round-trips through the layout ksEditor writes; AC axes (x, z, -y),
+# uv (u, -v), winding kept (face normal along the vertex normal), tangent orthogonal to the normal
+import struct  # noqa: E402
+import tempfile  # noqa: E402
+import kn5  # noqa: E402
+quad = {"objects": [{"name": "1ROAD", "material": "road", "verts": [(0, 0, 1), (4, 0, 1), (4, 4, 1), (0, 4, 1)],
+                     "faces": [[0, 1, 2, 3]], "uvs": [(0, 0), (1, 0), (1, 1), (0, 1)]}],
+        "empties": [{"name": "AC_START_0", "pos": [1, 2, 1], "fwd": [0.0, 1.0]}]}
+with tempfile.TemporaryDirectory() as tmp:
+    open(os.path.join(tmp, "a.png"), "wb").write(b"\x89PNGtest")
+    kn5.write(os.path.join(tmp, "t.kn5"), quad, {"road": ("ksPerPixel", {}, {"txDiffuse": "a.png"})}, tmp, "t")
+    blob = open(os.path.join(tmp, "t.kn5"), "rb").read()
+assert blob[:6] == b"sc6969" and struct.unpack_from("<iii", blob, 6) == (6, 0, 1)
+at = blob.index(b"1ROAD") + 5 + 4 + 1 + 3  # name, child count, active, cast / visible / transparent
+nv = struct.unpack_from("<i", blob, at)[0]
+vs = [struct.unpack_from("<11f", blob, at + 4 + 44 * k) for k in range(nv)]
+ni = struct.unpack_from("<i", blob, at + 4 + 44 * nv)[0]
+tri = struct.unpack_from("<3H", blob, at + 8 + 44 * nv)
+assert nv == 4 and ni == 6, (nv, ni)
+assert vs[2][:3] == (4.0, 1.0, -4.0) and vs[2][6:8] == (1.0, -1.0), vs[2]  # (x, z, -y), (u, -v)
+e1, e2 = [[vs[tri[k]][i] - vs[tri[0]][i] for i in range(3)] for k in (1, 2)]
+fn = (e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0])
+assert all(abs(v[4] - 1) < 1e-6 for v in vs) and fn[1] > 0, ("normal up, winding kept", fn)
+assert all(abs(sum(v[3 + i] * v[8 + i] for i in range(3))) < 1e-6 for v in vs), "tangent _|_ normal"
+start = blob.index(b"AC_START_0") + 10 + 4 + 1
+assert struct.unpack_from("<16f", blob, start)[8:15] == (0.0, 0.0, -1.0, 0.0, 1.0, 1.0, -2.0), "Z row = driving direction"
+
 print("ok", f"{geo['length']:.2f} m,", sum(len(o['faces']) for o in geo['objects']), "faces")

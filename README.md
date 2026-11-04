@@ -75,7 +75,20 @@ build/ortho_overlay.svg                   model na ortofotomapie – otwórz w p
 - **Ostrzeżenie:** szerokość poza oficjalnymi 7–10 m, banda na tarce (chyba że oznaczona `on_kerb`), nachylenie
   powyżej 8%, promień krawędzi asfaltu poniżej 2,5 m, lista wartości tymczasowych.
 
-## 4. Konwersja w ksEditor (tylko Windows)
+## 4. KN5
+
+`build.py all` zapisuje KN5 sam (`kn5.py`, czysty Python): `build/content/tracks/kartodrom_gostyn/kartodrom_gostyn.kn5`,
+z tymi samymi materiałami, które dostałby w ksEditorze (`build/fbx/kartodrom_gostyn.materials.json`). Układ pliku
+i konwencje (osie AC, odwrócone v, kierunek tangentu, macierze `AC_*`) są odczytane z KN5 zapisanego przez ksEditor
+i sprawdzone na nim: tekstury i materiały wychodzą identyczne, normalne i UV co do setnych stopnia. Potem:
+
+```
+py build.py install        # kopiuje folder toru do gry ($AC_ROOT, domyślnie Steam: ...\steamapps\common\assettocorsa)
+```
+
+### Ręcznie w ksEditor (opcjonalnie, tylko Windows)
+
+Do obejrzenia modelu albo gdyby gra nie przyjęła KN5 z `kn5.py`:
 
 1. Skopiuj na PC z Windowsem cały folder `build/fbx/` (FBX razem z `texture/` i `kartodrom_gostyn.fbx.ini`) oraz
    `build/content/`. ksEditor jest w grze: `assettocorsa\sdk\editor\ksEditor.exe` (uruchamiaj z tego folderu).
@@ -135,8 +148,10 @@ Nazwy menu mogą się nieco różnić między wersjami ksEditor.
 
 ## 5. Pierwszy przejazd w AC
 
-1. Skopiuj `content\tracks\kartodrom_gostyn` (z plikiem `.kn5` w środku) do `assettocorsa\content\tracks\`.
-2. Uruchom AC → Practice → tor „Kartodrom Gostyń”.
+1. `py build.py install` (albo skopiuj `build\content\tracks\kartodrom_gostyn` z plikiem `.kn5` do
+   `assettocorsa\content\tracks\`).
+2. Uruchom AC (najwygodniej przez Content Manager) → Practice → tor „Kartodrom Gostyń”; gokart np. darmowy mod
+   Sodikart Sodi RT10 (wariant GX390).
 3. Sprawdź:
    - [ ] tor ma prawdziwy rozmiar (nie 100× za duży lub za mały);
    - [ ] auto pojawia się na prostej startowej, przodem w kierunku nawrotu;

@@ -7,8 +7,9 @@
   python3 build.py fit-kerbs              measure each traced kerb's painted width on the orthophoto -> features.json
   python3 build.py validate               build geometry, validate, write build/mesh.json + build/preview.svg
   python3 build.py mod                    write mod folder (models.ini, surfaces.ini, ui_track.json)
-  python3 build.py fbx                    validate + Blender headless -> build/fbx/<folder>.fbx
-  python3 build.py all                    validate + fbx + mod
+  python3 build.py fbx                    validate + Blender headless -> build/fbx/<folder>.fbx + the track's .kn5
+  python3 build.py all                    validate + fbx + kn5 + mod
+  python3 build.py install                copy the mod folder into the game ($AC_ROOT, else Steam's default path)
 
 Blender: $BLENDER, else `blender` on PATH, else the macOS app bundle.
 """
@@ -473,7 +474,7 @@ def write_mod(cfg, geo):
     with open(os.path.join(track, "ui", "ui_track.json"), "w", encoding="utf-8") as f:
         json.dump(ui, f, ensure_ascii=False, indent=2)
     write_outline(geo, os.path.join(track, "ui", "outline.png"))
-    print(f"mod -> {os.path.relpath(track, ROOT)}  (add {cfg['folder']}.kn5 from ksEditor)")
+    print(f"mod -> {os.path.relpath(track, ROOT)}")
 
 
 def write_outline(geo, path, size=600, line_px=9, ss=3):
@@ -526,9 +527,37 @@ def export_fbx(cfg):
     print(f"fbx -> {os.path.relpath(out, ROOT)}")
 
 
+def write_kn5(cfg):
+    """The track's KN5 straight from build/mesh.json and the material settings Blender wrote (kn5.py) - ksEditor
+    is only needed to inspect it."""
+    import kn5
+    track = os.path.join(BUILD, "content", "tracks", cfg["folder"])
+    os.makedirs(track, exist_ok=True)
+    out = os.path.join(track, cfg["folder"] + ".kn5")
+    nodes = kn5.write_from_build(BUILD, cfg["folder"], out)
+    print(f"kn5 -> {os.path.relpath(out, ROOT)} ({nodes} nodes, {os.path.getsize(out) / 2 ** 20:.1f} MB)")
+
+
+AC_DEFAULT = r"C:\Program Files (x86)\Steam\steamapps\common\assettocorsa"
+
+
+def install(cfg):
+    """Copy the mod folder (with its KN5) into the game: $AC_ROOT, else Steam's default library."""
+    ac = os.environ.get("AC_ROOT") or AC_DEFAULT
+    if not os.path.exists(os.path.join(ac, "acs.exe")):
+        sys.exit(f"Assetto Corsa not found in {ac} - set AC_ROOT")
+    src = os.path.join(BUILD, "content", "tracks", cfg["folder"])
+    if not os.path.exists(os.path.join(src, cfg["folder"] + ".kn5")):
+        sys.exit("no KN5 yet - run `build.py all` first")
+    dst = os.path.join(ac, "content", "tracks", cfg["folder"])
+    shutil.copytree(src, dst, dirs_exist_ok=True)
+    print(f"installed -> {dst}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["import-osm", "fetch-ortho", "fit", "fetch-elevation", "fit-kerbs", "validate", "mod", "fbx", "all"])
+    ap.add_argument("command", choices=["import-osm", "fetch-ortho", "fit", "fetch-elevation", "fit-kerbs", "validate", "mod", "fbx", "all",
+                                        "install"])
     ap.add_argument("--force", action="store_true", help="import-osm / fit: overwrite data/centerline.csv")
     args = ap.parse_args()
     with open(TRACK_JSON, encoding="utf-8") as f:
@@ -543,9 +572,12 @@ def main():
         return fetch_elevation(cfg)
     if args.command == "fit-kerbs":
         return fit_kerbs(cfg)
+    if args.command == "install":
+        return install(cfg)
     geo = generate(cfg)
     if args.command in ("fbx", "all"):
         export_fbx(cfg)
+        write_kn5(cfg)
     if args.command in ("mod", "all"):
         write_mod(cfg, geo)
 
