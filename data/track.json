@@ -41,7 +41,7 @@
   "max_grade": 0.08,
   "max_input_gap_m": 20.0,
   "terrain_margin_m": 40.0,
-  "terrain_cell_m": 4.0,
+  "terrain_cell_m": 2.0,
   "ortho_margin_m": 50.0,
   "ortho_px_per_m": 12.0,
   "ortho_near_margin_m": 8.0,

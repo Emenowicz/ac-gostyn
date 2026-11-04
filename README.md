@@ -180,7 +180,7 @@ w modelu. Po zmianie uruchom `python3 build.py validate` i obejrzyj `build/ortho
 |---|---|
 | `data/centerline.csv` | oś toru `x,y,z,width` co 2 m; x – wschód, y – północ [m], z – m n.p.m.; pętla zamknięta niejawnie |
 | `data/features.json` | `start_finish` (linia startu), `grid` (środki namalowanych pól startowych), `painted_lines` (linie korytarzy), `barriers` (bandy z opon), `kerbs` (tarki), `extra_asphalt` (skróty, wjazdy) |
-| `data/elevation.csv` | siatka wysokości terenu co 4 m |
+| `data/elevation.csv` | siatka wysokości terenu co 2 m (GUGiK NMT; 4 m rozmywało np. nasyp pod trybunami) |
 | `data/track.json` | parametry; lista `placeholder` to wartości tymczasowe, `sources` to źródła danych |
 
 Współrzędne są w metrach względem punktu `origin_lat_lon` z `track.json`. Tarka powstaje tam, gdzie krawędź asfaltu
@@ -199,6 +199,9 @@ czerwono-niebieski beton za paskami).
 Banda z `"on_kerb": true` może stać na tarce, a `"height"` nadpisuje jej wysokość (np. 0,25 m dla pojedynczej opony
 leżącej przy wierzchołku). `"tyres": "black"` – banda z samych czarnych, niemalowanych opon (`TYRES_BLACK`: rząd
 wzdłuż skarpy na południu, skrót zachodni, przegroda w nawrocie C), inaczej bloki czerwone / żółte.
+`"stands"`: linie trybun wzdłuż prostej startowej – rząd ławek (czerwone deski na ciemnych nogach) i za nimi, od strony
+z dala od toru, siatkowe ogrodzenie 1,8 m ze słupkami (`STANDS`, `FENCE` z teksturą siatki z przezroczystością; siatka
+dostaje też kolizję w `1WALL`); obrys ławek z ortofotomapy 5 cm, wygląd ze zdjęć toru.
 `"trees"`: `[x, y, promień korony, wysokość]` – drzewa 3D (`TREES`, bez fizyki): po trzy skrzyżowane pionowe płaszczyzny
 z teksturą z przezroczystością (`ksPerPixelAT`, atlas czterech wariantów z `textures.tree_atlas`), oświetlone jak
 grunt. Korony z liśćmi wykryte na zdjęciu po kolorze i fakturze, drzewa bez liści na zdjęciu z kwietnia (szpaler przy

@@ -17,6 +17,7 @@ with open(src) as f:
 # Road, concrete, kerbs and lines get procedural textures + normal maps (textures.py). What is left here is flat:
 COLORS = {"grass": (0.18, 0.40, 0.12), "ground": (0.22, 0.36, 0.15)}
 INVISIBLE = {"collider"}  # fully transparent (alpha 0): collision-only objects, shader ksPerPixelAT in ksEditor
+ALPHA_TEXTURES = {"tree": lambda: textures.tree_atlas(), "fence": lambda: textures.fence_mesh()}  # cut out (alpha test)
 PHOTOS = ("ortho", "ortho_near")  # orthophotos: + mask and detail textures (ksMultilayer in ksEditor)
 MATTE = set(PHOTOS) | {"grass", "ground"}
 # asphalt on the sharp photo's UVs (trackgen drapes 1ROAD / 2ROAD when there is one): base = the photo's asphalt
@@ -117,7 +118,8 @@ def detail_textures():
 # specular (ksSpecular, ksSpecularEXP) per material for ksEditor; the rest stays matte (grass, soil, photo terrain)
 SHINE = {"kerb": (0.25, 30), "kerb_apron": (0.15, 20), "kerb_concrete": (0.1, 15),
          "concrete": (0.05, 10), "paint_white": (0.25, 30), "paint_mint": (0.25, 30), "chequer": (0.25, 30),
-         "tyre_red": (0.15, 15), "tyre_yellow": (0.15, 15), "tyre_black": (0.15, 15)}
+         "tyre_red": (0.15, 15), "tyre_yellow": (0.15, 15), "tyre_black": (0.15, 15), "bench": (0.1, 15),
+         "fence": (0.3, 20)}
 FLAT_GROUND = ("ROAD", "GRASS", "LINES_", "KERB", "APRON")  # objects lying on the ground: no shadow casting
 
 
@@ -164,7 +166,7 @@ def ks_persistence(details):
                           {"txDiffuse": "road_macro.png", "txMask": "mask_r.png", "txDetailR": "road.png",
                            "txDetailG": "road.png", "txDetailB": "road.png", "txDetailA": "road.png",
                            "txDetailNM": "road_nm.png"})
-        elif name in INVISIBLE or name == "tree":  # alpha-tested: collision (alpha 0 everywhere), tree sprites
+        elif name in INVISIBLE or name in ALPHA_TEXTURES:  # alpha-tested: collision (alpha 0), trees, fence mesh
             mats[name] = ("ksPerPixelAT", {**vals, "ksAlphaRef": 0.5}, {"txDiffuse": f"{name}.png"})
         elif os.path.exists(os.path.join(texdir, name + "_nm.png")):
             mats[name] = ("ksPerPixelNM", vals, {"txDiffuse": f"{name}.png", "txNormal": f"{name}_nm.png"})
@@ -278,9 +280,9 @@ def material(name):
             photo_mask(name, img)
         elif name == "road" and ROAD_MACRO:  # FBX: the brightness map; the tile is its detail (ksMultilayer)
             img, road_tile[:] = road_macro()
-        elif name == "tree":  # sprite atlas with alpha (ksPerPixelAT): written as RGBA, loaded back for the preview
-            path = os.path.join(texdir, "tree.png")
-            textures.write_png(path, textures.tree_atlas())
+        elif name in ALPHA_TEXTURES:  # RGBA (ksPerPixelAT): written as is, loaded back for the preview
+            path = os.path.join(texdir, name + ".png")
+            textures.write_png(path, ALPHA_TEXTURES[name]())
             img = bpy.data.images.load(path)
         elif name in textures.SURFACES:  # procedural texture + normal map (shader ksPerPixelNM in ksEditor)
             make, strength = textures.SURFACES[name]
@@ -313,7 +315,7 @@ def material(name):
         tex = nodes.new("ShaderNodeTexImage")
         tex.image = img
         links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
-        if name in INVISIBLE or name == "tree":  # cut out in the .blend preview too
+        if name in INVISIBLE or name in ALPHA_TEXTURES:  # cut out in the .blend preview too
             links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
             if hasattr(mat, "surface_render_method"):
                 mat.surface_render_method = "DITHERED"

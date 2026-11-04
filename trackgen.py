@@ -234,8 +234,9 @@ def load_ground(path):
     cell = xs[1] - xs[0]
     grid = {(round((x - xs[0]) / cell), round((y - ys[0]) / cell)): h for x, y, h in rows}
     # GUGiK gives heights to 0.1 m: bilinear between them makes 10 cm terraces (waves on the plates and the grass).
-    # Two passes of a 3 x 3 binomial filter (the cells at the edge average what they have) smooth them away.
-    for _ in range(2):
+    # One pass of a 3 x 3 binomial filter (the cells at the edge average what they have) smooths them away on the 2 m
+    # grid while keeping banks like the one under the start straight's benches (+1.3 m over 3 m) - two passes didn't.
+    for _ in range(1):
         out = {}
         for (i, j) in grid:
             acc = wsum = 0.0
@@ -482,6 +483,78 @@ def _trees(trees, ground):
     return verts, faces, uvs
 
 
+BENCH = dict(unit=2.8, gap=0.4, depth=0.35, seat=0.42, plank=0.06, leg=0.06)  # spectator benches (photos)
+FENCE = dict(offset=0.7, height=1.8, post_every=2.5, post=0.05, uv_m=2.5)  # wire mesh fence behind them
+
+
+def _cuboid(cx, cy, z0, along, across, height, ux, uy, uv):
+    """Axis box along unit (ux, uy): `along` x `across` x `height`, base at z0, no bottom face; every face mapped to
+    the uv rectangle (u0, v0, u1, v1) of the bench atlas."""
+    nx, ny = -uy, ux
+    a, c = along / 2, across / 2
+    corners = [(cx + sa * a * ux + sc * c * nx, cy + sa * a * uy + sc * c * ny) for sa, sc in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    verts = [(x, y, z0) for x, y in corners] + [(x, y, z0 + height) for x, y in corners]
+    u0, v0, u1, v1 = uv
+    faces = [[4, 5, 6, 7]] + [[k, (k + 1) % 4, 4 + (k + 1) % 4, 4 + k] for k in range(4)]
+    out_v, out_f, out_uv = [], [], []
+    for f in faces:  # own corners per face, so each maps the whole uv rectangle
+        base = len(out_v)
+        out_v += [verts[i] for i in f]
+        out_uv += [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
+        out_f.append([base, base + 1, base + 2, base + 3])
+    return out_v, out_f, out_uv
+
+
+def _stands(points, ground, away):
+    """Spectator area along a polyline: a row of benches (red planks on dark legs) and, `away` from the track
+    behind them, a wire mesh fence with posts. Returns (benches, fence, fence_line) parts; benches + posts use the
+    bench atlas (planks u 0..0.5, metal u 0.5..1), the fence its alpha-tested mesh texture."""
+    benches, fence = [], []
+    total = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
+
+    def at(s):
+        for a, b in zip(points, points[1:]):
+            d = math.dist(a, b)
+            if s <= d or b is points[-1]:
+                t = min(1.0, s / (d or 1.0))
+                ux, uy = (b[0] - a[0]) / (d or 1.0), (b[1] - a[1]) / (d or 1.0)
+                return a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), ux, uy
+            s -= d
+    B, F = BENCH, FENCE
+    s = B["gap"] / 2
+    while s + B["unit"] <= total:
+        x, y, ux, uy = at(s + B["unit"] / 2)
+        z = ground(x, y)
+        benches.append(_cuboid(x, y, z + B["seat"] - B["plank"], B["unit"], B["depth"], B["plank"], ux, uy, (0.0, 0.0, 0.5, 1.0)))
+        for end in (-1, 1):
+            lx, ly = x + end * (B["unit"] / 2 - 0.2) * ux, y + end * (B["unit"] / 2 - 0.2) * uy
+            benches.append(_cuboid(lx, ly, ground(lx, ly) - 0.05, B["leg"], B["depth"] - 0.05, B["seat"] - B["plank"] + 0.05,
+                                ux, uy, (0.5, 0.0, 1.0, 1.0)))
+        s += B["unit"] + B["gap"]
+    # the fence: one quad per polyline segment (double-sided), offset away from the track
+    line = []
+    for (ax, ay), (bx, by) in zip(points, points[1:]):
+        d = math.dist((ax, ay), (bx, by)) or 1.0
+        nx, ny = away * -(by - ay) / d, away * (bx - ax) / d
+        line.append(((ax + nx * F["offset"], ay + ny * F["offset"]), (bx + nx * F["offset"], by + ny * F["offset"])))
+    run = 0.0
+    for (p, q) in line:
+        d = math.dist(p, q)
+        zp, zq = ground(*p) - 0.05, ground(*q) - 0.05
+        v = [(p[0], p[1], zp), (q[0], q[1], zq), (q[0], q[1], zq + F["height"]), (p[0], p[1], zp + F["height"])]
+        uv = [(run / F["uv_m"], 0.0), ((run + d) / F["uv_m"], 0.0), ((run + d) / F["uv_m"], 1.0), (run / F["uv_m"], 1.0)]
+        fence.append((v, [[0, 1, 2, 3], [3, 2, 1, 0]], uv))
+        k = 0
+        while k * F["post_every"] <= d:  # posts on the fence line
+            t = k * F["post_every"] / d
+            px_, py_ = p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])
+            benches.append(_cuboid(px_, py_, ground(px_, py_) - 0.05, F["post"], F["post"], F["height"] + 0.1,
+                                (q[0] - p[0]) / d, (q[1] - p[1]) / d, (0.5, 0.0, 1.0, 1.0)))
+            k += 1
+        run += d
+    return benches, fence, [line[0][0]] + [q for _, q in line]
+
+
 def _ribbon(points, width, zfn):
     """Flat strip `width` wide centred on a polyline, faces up; u 0 (right of the polyline's direction) -> 1 (left),
     v = distance / UV_M along. For painted markings (no physics)."""
@@ -710,6 +783,19 @@ def build(cfg, pts, ground=None, features=None, photo=None, photo_near=None):
         objects += _chunks(f"TYRES_{c.split('_')[1].upper()}", c, parts)
     if (features or {}).get("trees"):  # scenery only: no digit prefix = no physics; lit from above (normal_up)
         objects.append({**_merge("TREES", "tree", [_trees(features["trees"], ground_z)]), "normal_up": True})
+    benches, fences = [], []
+    for st in (features or {}).get("stands", []):  # benches + fence; the fence also gets a collision box (1WALL)
+        p0 = st["points"][len(st["points"]) // 2]
+        k = min(range(n), key=lambda i: (samples[i][0] - p0[0]) ** 2 + (samples[i][1] - p0[1]) ** 2)
+        (ax, ay), (bx, by) = st["points"][0], st["points"][-1]
+        side = (-(by - ay)) * (p0[0] - samples[k][0]) + (bx - ax) * (p0[1] - samples[k][1])  # left normal . away
+        b, f, line = _stands(st["points"], ground_z, 1 if side > 0 else -1)
+        benches += b
+        fences += f
+        walls += _barrier(line, ground_z, FENCE["height"], 0.1)
+    if benches:
+        objects += [_merge("STANDS", "bench", benches), _merge("FENCE", "fence", fences)]
+        objects = [o if o["name"] != "1WALL" else _merge("1WALL", "collider", walls) for o in objects]
 
     # painted markings (visual only, lifted like the edge lines; the chequered line a little higher where they cross)
     on_road = lambda dz: (lambda x, y: z_at(x, y) + GROUND_SINK_M + dz)
@@ -980,7 +1066,7 @@ def validate(cfg, pts, geo):
             errors.append(f"1ROAD has {len(o['faces'])} quads for {len(sm)} samples - asphalt has holes")
         wall = o["name"].endswith("WALL")  # vertical sides are fine, upside-down not
         # tyre bulges face down below their widest point, tree planes are vertical and double-sided: only degenerate counts
-        round_ = o["name"].startswith("TYRES_") or o["name"] == "TREES"
+        round_ = o["name"].startswith("TYRES_") or o["name"] in ("TREES", "FENCE", "STANDS")
         for f in o["faces"]:
             nx, ny, nz = _normal(o["verts"], f)
             area = math.sqrt(nx * nx + ny * ny + nz * nz)

@@ -273,6 +273,34 @@ def tree_atlas(w=256, h=512, seed=120):
     return np.concatenate(out, axis=1)
 
 
+def bench_atlas(w=512, h=256, seed=140):
+    """Spectator benches: u 0..0.5 the seat, red-painted wooden planks with grain and wear (photos), u 0.5..1 the
+    dark metal of the legs and fence posts."""
+    y, x = np.mgrid[0:h, 0:w]
+    wood = x < w // 2
+    grain = noise((h, w), 0.8, seed) + 0.6 * noise((h, w), 3.0, seed + 1)
+    planks = ((y * 3 // h) % 3 == 0)  # three planks across the seat, dark joints between them
+    joint = (y % (h // 3)) < 3
+    red = np.asarray((0.52, 0.14, 0.09)) * (1 + 0.10 * grain[..., None])
+    red = mix(red, (0.42, 0.32, 0.26), 0.25 * smoothstep(1.0, 2.2, noise((h, w), 6, seed + 2)))  # worn to bare wood
+    metal = np.asarray((0.11, 0.11, 0.12)) * (1 + 0.15 * noise((h, w), 1.0, seed + 3)[..., None])
+    albedo = np.where(wood[..., None], np.where(joint[..., None], np.asarray((0.12, 0.05, 0.04)), red), metal)
+    height = np.where(wood, 0.6 * grain - 2.0 * joint + 0.0 * planks, 0.3 * noise((h, w), 1.0, seed + 4))
+    return np.clip(albedo, 0, 1), height
+
+
+def fence_mesh(w=512, h=384, cell_px=10, seed=150):
+    """Wire mesh fence, one 2.5 m x 1.8 m panel (trackgen.FENCE uv_m / height), RGBA, row 0 = bottom: diamond mesh
+    ~5 cm, galvanised grey, a tube along the top and the bottom; alpha 1 on the wire only (alpha test)."""
+    y, x = np.mgrid[0:h, 0:w]
+    a = ((x + y) % cell_px < 2) | ((x - y) % cell_px < 2)
+    rails = (y < 6) | (y >= h - 8)
+    wire = a | rails
+    tone = 0.55 + 0.06 * noise((h, w), 2.0, seed)
+    rgb = np.dstack((tone, tone + 0.01, tone + 0.02)) * np.where(rails, 0.85, 1.0)[..., None]
+    return np.dstack((np.clip(rgb, 0, 1), wire.astype(float)))
+
+
 PHOTO_SATURATION, PHOTO_GAIN = 1.8, 0.92
 
 
@@ -304,4 +332,5 @@ SURFACES = {"road": (asphalt, 6.0), "concrete": (concrete, 4.0), "kerb": (kerb_s
             "chequer": (chequer, 2.0),
             "tyre_red": (lambda: tyre((0.62, 0.08, 0.06), seed=70), 3.0),
             "tyre_yellow": (lambda: tyre((0.88, 0.70, 0.12), seed=80), 3.0),
-            "tyre_black": (lambda: tyre((0.09, 0.09, 0.09), seed=90), 3.0)}  # unpainted rows (embankment)
+            "tyre_black": (lambda: tyre((0.09, 0.09, 0.09), seed=90), 3.0),  # unpainted rows (embankment)
+            "bench": (bench_atlas, 2.0)}

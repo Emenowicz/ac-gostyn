@@ -250,6 +250,13 @@ atlas = textures.tree_atlas(w=64, h=128)
 assert atlas.shape == (128, 64 * trackgen.TREE_VARIANTS, 4) and set(np.unique(atlas[..., 3])) <= {0.0, 1.0}
 assert 0.15 < atlas[..., 3].mean() < 0.6, atlas[..., 3].mean()
 
+# stands: benches along the line, the fence `away` behind them (+left normal here: y > 0), 1.8 m tall, posts
+sb, sf, sline = trackgen._stands([[0.0, 0.0], [10.0, 0.0]], lambda x, y: 0.0, 1)
+assert len(sb) >= 3 * 3 and all(abs(p[1] - trackgen.FENCE["offset"]) < 1e-9 for p in sline), sline
+assert max(v[2] for v, _, _ in sf for v in v) == trackgen.FENCE["height"] - 0.05
+seat_tops = {round(max(v[2] for v in part[0]), 3) for part in sb}
+assert trackgen.BENCH["seat"] in seat_tops, seat_tops
+
 # KN5 writer: a one-quad track + a start dummy round-trips through the layout ksEditor writes; AC axes (x, z, -y),
 # uv (u, -v), winding kept (face normal along the vertex normal), tangent orthogonal to the normal
 import struct  # noqa: E402
