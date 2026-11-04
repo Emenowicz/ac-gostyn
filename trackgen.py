@@ -167,6 +167,26 @@ def _end_taper(mask, lift, ds, ramp_m):
     return [lift * min(1.0, d[r] * ds / ramp_m) if on[r] else 0.0 for r in range(n)]
 
 
+def _kerb_taper(ids, tapers, ds, default):
+    """Width factor per sample row for kerbs that narrow to a point at their ends (as painted), linearly over
+    tapers[j] = [start, end] metres (driving order; default when None). No taper where a kerb meets another kerb."""
+    n = len(ids)
+    out = [1.0] * n
+    starts = [i for i in range(n) if ids[i] is not None and ids[i] != ids[i - 1]]
+    for a in starts:  # run of quads a..b (rows a..b+1)
+        j, b = ids[a], a
+        while ids[(b + 1) % n] == j and (b + 1) % n != a:
+            b += 1
+        t0, t1 = tapers[j] if tapers[j] else (default, default)
+        t0 = t0 if ids[a - 1] is None else 0.0
+        t1 = t1 if ids[(b + 1) % n] is None else 0.0
+        for r in range(a, b + 2):
+            f0 = min(1.0, (r - a) * ds / t0) if t0 > 0 else 1.0
+            f1 = min(1.0, (b + 1 - r) * ds / t1) if t1 > 0 else 1.0
+            out[r % n] = min(out[r % n], f0, f1)
+    return out
+
+
 def _merge(name, material, parts):
     verts, faces, uvs = [], [], []
     for v, f, uv in parts:
@@ -473,13 +493,17 @@ def build(cfg, pts, ground=None, features=None, photo=None, photo_near=None):
                    for side in (1, -1)}
         kerb = {side: [j is not None for j in ids] for side, ids in kerb_id.items()}
         kwidth = {side: [klines[j].get("width", kw) if j is not None else kw for j in ids] for side, ids in kerb_id.items()}
+        # painted kerbs narrow to a point at both ends; "taper_m": [start, end] per kerb, else kerb_taper_m
+        tapers = [k.get("taper_m") for k in klines]
+        kwidth = {side: [w * f for w, f in zip(kwidth[side], _kerb_taper(ids, tapers, ds, cfg.get("kerb_taper_m", 1.5)))]
+                  for side, ids in kerb_id.items()}
     else:  # fallback: inside of corners
         kerb_id = {side: [None] * n for side in (1, -1)}
         kerb = {side: [side * k > cfg["kerb_min_curvature"] for k in curv] for side in (1, -1)}
         kwidth = {side: [kw] * n for side in (1, -1)}
     kerb_out, wall_off = {}, {}
     for side in (1, -1):
-        # kerbs keep a constant width along the asphalt edge (as painted) unless the free space really ends;
+        # kerbs keep their (end-tapered) width along the asphalt edge unless the free space really ends;
         # the raw cap is used because the smoothed one also narrows the kerb before and after a tight apex
         kerb_out[side] = [max(h + 0.1, min(h + w, 0.9 * c)) for h, w, c in zip(half, kwidth[side], raw_caps[side])]
         # run-off just stops where space runs out (the terrain covers the rest) instead of pinching into a notch

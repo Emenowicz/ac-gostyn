@@ -145,6 +145,8 @@ leży bliżej niż `kerb_snap_m` od linii z `kerbs`; jej szerokość to `width` 
 na krawędzi asfaltu, a krawędź asfaltu to malowana biała linia. `"style"` tarki: `stripes` (domyślnie, paski czerwono-żółte),
 `apron` (wylewka z czerwonego betonu z jasnym brzegiem), `concrete` (szara betonowa wylewka). Obie wylewki są
 podniesione o 3 cm jak tarka i mają własną nawierzchnię `APRON` ze słabszą wibracją niż `KERB`.
+Tarka zwęża się do szpica na końcach na długości `"taper_m": [początek, koniec]` (w metrach, w kierunku jazdy;
+domyślnie `kerb_taper_m` z `track.json`), bez zwężenia tam, gdzie styka się z inną tarką.
 Banda z `"on_kerb": true` może stać na tarce, a `"height"` nadpisuje jej wysokość (np. 0,25 m dla pojedynczej opony leżącej przy wierzchołku).
 Płyta z `extra_asphalt` może być dowolnym wielokątem bez samoprzecięć. Pola startowe `AC_START_*` stoją na punktach z `grid`
 (kolejno od linii mety); gdy `grid_slots` w `track.json` jest większe, kolejne pola przedłużają obie kolumny o zmierzony

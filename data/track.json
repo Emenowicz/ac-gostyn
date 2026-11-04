@@ -24,6 +24,7 @@
   "wall_height_m": 0.6,
   "wall_thickness_m": 0.6,
   "kerb_snap_m": 1.5,
+  "kerb_taper_m": 1.5,
   "kerb_width_range_m": [0.6, 2.5],
   "line_width_m": 0.1,
   "grid_slots": 10,

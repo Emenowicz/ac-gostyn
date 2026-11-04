@@ -119,6 +119,22 @@ for e in data["empties"]:
     ob.matrix_world = Matrix(((-fy, 0, fx, x), (fx, 0, fy, y), (0, 1, 0, z), (0, 0, 0, 1)))
     scene.collection.objects.link(ob)
 
+# open the .blend on the track: the default view looks at the origin from a few metres, but the track lies ~90 m up
+road = [v for o in data["objects"] if o["name"] == "1ROAD" for v in o["verts"]]
+if road:
+    from mathutils import Euler
+    centre = Vector([(min(v[k] for v in road) + max(v[k] for v in road)) / 2 for k in range(3)])
+    span = max(max(v[k] for v in road) - min(v[k] for v in road) for k in (0, 1))
+    for screen in bpy.data.screens:
+        for area in screen.areas:
+            if area.type == "VIEW_3D":
+                space = area.spaces[0]
+                space.clip_start, space.clip_end = 0.05, 5000.0
+                space.shading.type = "MATERIAL"
+                r3d = space.region_3d
+                r3d.view_perspective = "PERSP"
+                r3d.view_location, r3d.view_distance = centre, span
+                r3d.view_rotation = Euler((0.75, 0.0, 0.35)).to_quaternion()
 bpy.ops.wm.save_as_mainfile(filepath=os.path.splitext(os.path.abspath(out))[0] + ".blend")
 bpy.ops.export_scene.fbx(
     filepath=os.path.abspath(out),

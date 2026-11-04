@@ -65,6 +65,15 @@ for style, name in (("apron", "1APRON"), ("concrete", "2APRON"), ("stripes", "1K
         assert abs(top - 0.03) < 1e-9 and min(v[2] for v in objs[name]["verts"]) == road_z, top
     else:
         assert abs(top) < 1e-9, top
+# kerbs narrow to a point at their ends over their taper (start, end); none where a kerb meets another kerb
+f = trackgen._kerb_taper([None, 0, 0, 0, 0, 0, 1, 1, None, None], [[2.0, 4.0], None], 1.0, 1.0)
+assert f[1] == 0.0 and abs(f[2] - 0.5) < 1e-9 and f[3] == 1.0, f  # kerb 0 starts with a 2 m taper
+assert f[5] == 1.0 and f[6] == 1.0  # kerb 0 -> kerb 1: no neck where they meet
+assert f[8] == 0.0 and abs(f[7] - 1.0) < 1e-9, f  # kerb 1 ends with the 1 m default taper
+kerb_v = next(o for o in g2["objects"] if o["name"] == "1KERB")["verts"]
+widths = sorted(abs(math.hypot(*v[:2]) - R) for v in kerb_v)  # this test kerb is on the outside: |r - R| - 4 = width
+assert widths[0] < 4.2 and widths[-1] > 4.5, (widths[0], widths[-1])  # pointed ends, full width in the middle
+
 # raised kerbs ramp up from 0 at both ends of every run (also across the seam), full lift after ramp_m
 up = trackgen._end_taper([False, True, True, True, True, False, False, False], 0.03, 1.0, 1.5)
 assert up[1] == 0.0 and up[5] == 0.0 and abs(up[2] - 0.02) < 1e-9 and abs(up[3] - 0.03) < 1e-9 and up[7] == 0.0, up
