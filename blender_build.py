@@ -17,7 +17,8 @@ with open(src) as f:
 # Road, concrete, kerbs and lines get procedural textures + normal maps (textures.py). What is left here is flat:
 COLORS = {"grass": (0.18, 0.40, 0.12), "ground": (0.22, 0.36, 0.15)}
 INVISIBLE = {"collider"}  # fully transparent (alpha 0): collision-only objects, shader ksPerPixelAT in ksEditor
-ALPHA_TEXTURES = {"tree": lambda: textures.tree_atlas(), "fence": lambda: textures.fence_mesh()}  # cut out (alpha test)
+ALPHA_TEXTURES = {"tree": lambda: textures.tree_atlas(), "fence": lambda: textures.fence_mesh(),
+                  "fence_wire": lambda: textures.fence_wire()}  # cut out (alpha test)
 PHOTOS = ("ortho", "ortho_near")  # orthophotos: + mask and detail textures (ksMultilayer in ksEditor)
 MATTE = set(PHOTOS) | {"grass", "ground"}
 # asphalt on the sharp photo's UVs (trackgen drapes 1ROAD / 2ROAD when there is one): base = the photo's asphalt
@@ -119,7 +120,7 @@ def detail_textures():
 SHINE = {"kerb": (0.25, 30), "kerb_apron": (0.15, 20), "kerb_concrete": (0.1, 15),
          "concrete": (0.05, 10), "paint_white": (0.25, 30), "paint_mint": (0.25, 30), "chequer": (0.25, 30),
          "tyre_red": (0.15, 15), "tyre_yellow": (0.15, 15), "tyre_black": (0.15, 15), "bench": (0.1, 15),
-         "fence": (0.3, 20)}
+         "fence": (0.3, 20), "fence_wire": (0.2, 15)}
 FLAT_GROUND = ("ROAD", "GRASS", "LINES_", "KERB", "APRON")  # objects lying on the ground: no shadow casting
 
 
@@ -342,6 +343,9 @@ for o in data["objects"]:
     if me.validate():
         print(f"WARNING: Blender fixed invalid geometry in {o['name']}")
     me.update()
+    if o.get("normal_up"):  # foliage sprites lit like the ground, as kn5.py writes them (not by their planes)
+        me.polygons.foreach_set("use_smooth", [True] * len(me.polygons))
+        me.normals_split_custom_set_from_vertices([(0.0, 0.0, 1.0)] * len(me.vertices))
     me.materials.append(material(o["material"]))
     ob = bpy.data.objects.new(o["name"], me)
     scene.collection.objects.link(ob)

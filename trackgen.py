@@ -464,17 +464,19 @@ TREE_VARIANTS = 4  # tree sprites side by side in the tree texture (textures.tre
 
 
 def _trees(trees, ground):
-    """Each tree [x, y, crown radius, height]: three vertical planes crossed at 60 deg, 2.4 r wide (the sprite's
-    crown fills ~80 % of it), double-sided (AC draws one side), standing 0.1 m into the ground; a sprite variant and
-    a turn per tree from its position, so neighbours differ."""
+    """Each tree [x, y, crown radius, height(, sprite kind)]: four vertical planes crossed at 45 deg, 2.4 r wide (the
+    sprite's crown fills ~80 % of it), double-sided (AC draws one side), standing 0.1 m into the ground; without a
+    kind a broadleaf sprite variant from the position, and a turn per tree, so neighbours differ."""
     verts, faces, uvs = [], [], []
-    for x, y, r, h in trees:
+    for t in trees:
+        x, y, r, h = t[:4]
         seed = int(abs(x * 7.3 + y * 13.1) * 10)
-        var, turn = seed % TREE_VARIANTS, (seed % 60) * math.pi / 180
+        var = t[4] if len(t) > 4 else seed % (TREE_VARIANTS - 1)  # the last sprite (conifer) only when asked for
+        turn = (seed % 45) * math.pi / 180
         z0, half = ground(x, y) - 0.1, 1.2 * r
         u0, u1 = var / TREE_VARIANTS, (var + 1) / TREE_VARIANTS
-        for k in range(3):
-            a = turn + k * math.pi / 3
+        for k in range(4):
+            a = turn + k * math.pi / 4
             dx, dy = half * math.cos(a), half * math.sin(a)
             base = len(verts)
             verts += [(x - dx, y - dy, z0), (x + dx, y + dy, z0), (x + dx, y + dy, z0 + h), (x - dx, y - dy, z0 + h)]
@@ -483,8 +485,11 @@ def _trees(trees, ground):
     return verts, faces, uvs
 
 
-BENCH = dict(unit=2.8, gap=0.4, depth=0.35, seat=0.42, plank=0.06, leg=0.06)  # spectator benches (photos)
-FENCE = dict(offset=0.7, height=1.8, post_every=2.5, post=0.05, uv_m=2.5)  # wire mesh fence behind them
+# spectator benches (5 cm photo: seats ~0.45 m deep, runs of ~8 m with ~1 m gaps; photos: red planks on dark frames)
+# two rows of them, one behind the other up the bank (project author): row centres this far from the stand line
+BENCH = dict(unit=8.0, gap=1.0, seat=0.43, planks=3, plank_w=0.13, plank_gap=0.03, plank_t=0.04, frame_every=2.0,
+             leg=0.05, rows=(-0.55, 0.55))
+FENCE = dict(offset=2.9, height=2.5, post_every=2.5, post=0.06, uv_m=2.5, uv_h=1.8)  # wire mesh behind them (photos: ~2.5 m, galvanised); the mesh texture repeats every uv_m x uv_h
 
 
 def _cuboid(cx, cy, z0, along, across, height, ux, uy, uv):
@@ -505,10 +510,33 @@ def _cuboid(cx, cy, z0, along, across, height, ux, uy, uv):
     return out_v, out_f, out_uv
 
 
-def _stands(points, ground, away):
-    """Spectator area along a polyline: a row of benches (red planks on dark legs) and, `away` from the track
-    behind them, a wire mesh fence with posts. Returns (benches, fence, fence_line) parts; benches + posts use the
-    bench atlas (planks u 0..0.5, metal u 0.5..1), the fence its alpha-tested mesh texture."""
+def _beam(p, q, zp, zq, width, thick, uv):
+    """A box from p to q (plan), its top at zp / zq at the ends (follows the slope), `width` across, `thick` deep."""
+    d = math.dist(p, q) or 1.0
+    nx, ny = -(q[1] - p[1]) / d * width / 2, (q[0] - p[0]) / d * width / 2
+    top = [(p[0] - nx, p[1] - ny, zp), (q[0] - nx, q[1] - ny, zq), (q[0] + nx, q[1] + ny, zq), (p[0] + nx, p[1] + ny, zp)]
+    bot = [(x, y, z - thick) for x, y, z in top]
+    u0, v0, u1, v1 = uv
+    quads = [top[::-1] if False else top, [bot[3], bot[2], bot[1], bot[0]]]
+    for k in range(4):
+        a, b = k, (k + 1) % 4
+        quads.append([bot[a], bot[b], top[b], top[a]])
+    verts, faces, uvs = [], [], []
+    for qd in quads:
+        base = len(verts)
+        verts += qd
+        uvs += [(u0, v0), (u1, v0), (u1, v1), (u0, v1)]
+        faces.append([base, base + 1, base + 2, base + 3])
+    return verts, faces, uvs
+
+
+def _stands(points, ground, away, runs=None, fence_offset=None):
+    """Spectator area along a polyline: benches and, `away` from the track behind them, a wire mesh fence with posts.
+
+    runs: [[s0, s1], ...] metres along the polyline where a bench stands (traced on the photo), else BENCH unit / gap
+    repeated. A bench = BENCH planks (red, along it, following the slope) on frames every ~frame_every m (two dark
+    legs and a cross bar). Returns (bench parts, fence parts, fence line); benches + posts use the bench atlas
+    (planks u 0..0.5, metal u 0.5..1), the fence its alpha-tested mesh texture."""
     benches, fence = [], []
     total = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
 
@@ -521,38 +549,254 @@ def _stands(points, ground, away):
                 return a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), ux, uy
             s -= d
     B, F = BENCH, FENCE
-    s = B["gap"] / 2
-    while s + B["unit"] <= total:
-        x, y, ux, uy = at(s + B["unit"] / 2)
-        z = ground(x, y)
-        benches.append(_cuboid(x, y, z + B["seat"] - B["plank"], B["unit"], B["depth"], B["plank"], ux, uy, (0.0, 0.0, 0.5, 1.0)))
-        for end in (-1, 1):
-            lx, ly = x + end * (B["unit"] / 2 - 0.2) * ux, y + end * (B["unit"] / 2 - 0.2) * uy
-            benches.append(_cuboid(lx, ly, ground(lx, ly) - 0.05, B["leg"], B["depth"] - 0.05, B["seat"] - B["plank"] + 0.05,
-                                ux, uy, (0.5, 0.0, 1.0, 1.0)))
-        s += B["unit"] + B["gap"]
+    red, yellow, metal = (0.0, 0.0, 0.25, 1.0), (0.25, 0.0, 0.5, 1.0), (0.5, 0.0, 1.0, 1.0)
+    if runs is None:
+        runs, s = [], B["gap"] / 2
+        while s + B["unit"] <= total:
+            runs.append([s, s + B["unit"]])
+            s += B["unit"] + B["gap"]
+    depth = B["planks"] * B["plank_w"] + (B["planks"] - 1) * B["plank_gap"]
+    for k_run, (s0, s1), row in ((k, r, o) for k, r in enumerate(runs) for o in B["rows"]):
+        wood = red if k_run % 2 == 0 else yellow  # each pair one colour, the pairs alternate
+        s0, s1 = max(0.0, s0), min(total, s1)
+        n = max(1, round((s1 - s0) / B["frame_every"]))
+        stations = [s0 + (s1 - s0) * k / n for k in range(n + 1)]
+        pts = [(x + away * -uy * row, y + away * ux * row, ux, uy) for x, y, ux, uy in (at(t) for t in stations)]
+        seat_z = [ground(x, y) + B["seat"] for x, y, _, _ in pts]
+        for k in range(B["planks"]):  # planks along the bench, side by side across it
+            off = -depth / 2 + B["plank_w"] / 2 + k * (B["plank_w"] + B["plank_gap"])
+            for (xa, ya, ux, uy), (xb, yb, _, _), za, zb in zip(pts, pts[1:], seat_z, seat_z[1:]):
+                nx, ny = -uy * off, ux * off
+                benches.append(_beam((xa + nx, ya + ny), (xb + nx, yb + ny), za, zb, B["plank_w"], B["plank_t"], wood))
+        for (x, y, ux, uy), z in zip(pts, seat_z):  # frames: two legs and a cross bar under the planks
+            nx, ny = -uy, ux
+            for e in (-1, 1):
+                lx, ly = x + e * (depth / 2 - 0.05) * nx, y + e * (depth / 2 - 0.05) * ny
+                g = ground(lx, ly) - 0.05
+                benches.append(_cuboid(lx, ly, g, B["leg"], B["leg"], z - B["plank_t"] - g, ux, uy, metal))
+            benches.append(_beam((x - nx * depth / 2, y - ny * depth / 2), (x + nx * depth / 2, y + ny * depth / 2),
+                                 z - B["plank_t"], z - B["plank_t"], 0.05, 0.05, metal))
     # the fence: one quad per polyline segment (double-sided), offset away from the track
+    off = F["offset"] if fence_offset is None else fence_offset
     line = []
     for (ax, ay), (bx, by) in zip(points, points[1:]):
         d = math.dist((ax, ay), (bx, by)) or 1.0
         nx, ny = away * -(by - ay) / d, away * (bx - ax) / d
-        line.append(((ax + nx * F["offset"], ay + ny * F["offset"]), (bx + nx * F["offset"], by + ny * F["offset"])))
+        line.append(((ax + nx * off, ay + ny * off), (bx + nx * off, by + ny * off)))
     run = 0.0
     for (p, q) in line:
         d = math.dist(p, q)
         zp, zq = ground(*p) - 0.05, ground(*q) - 0.05
-        v = [(p[0], p[1], zp), (q[0], q[1], zq), (q[0], q[1], zq + F["height"]), (p[0], p[1], zp + F["height"])]
-        uv = [(run / F["uv_m"], 0.0), ((run + d) / F["uv_m"], 0.0), ((run + d) / F["uv_m"], 1.0), (run / F["uv_m"], 1.0)]
-        fence.append((v, [[0, 1, 2, 3], [3, 2, 1, 0]], uv))
-        k = 0
-        while k * F["post_every"] <= d:  # posts on the fence line
-            t = k * F["post_every"] / d
+    mesh, posts = _fence([line[0][0]] + [q for _, q in line], ground, F["height"])
+    return benches, fence + mesh, [line[0][0]] + [q for _, q in line], posts
+
+
+def _fence(points, ground, height, post_every=None, tile=(None, None)):
+    """A fence along a polyline: one double-sided quad per segment (mesh texture repeating every tile = (m along,
+    m up); FENCE uv_m / uv_h by default) and posts (galvanised, lamp atlas light half) every post_every m.
+    Returns (mesh parts, post parts)."""
+    F = FENCE
+    every = post_every or F["post_every"]
+    tu, tv = tile[0] or F["uv_m"], tile[1] or F["uv_h"]
+    mesh, posts, run = [], [], 0.0
+    for p, q in zip(points, points[1:]):
+        d = math.dist(p, q) or 1.0
+        zp, zq = ground(*p) - 0.05, ground(*q) - 0.05
+        v = [(p[0], p[1], zp), (q[0], q[1], zq), (q[0], q[1], zq + height), (p[0], p[1], zp + height)]
+        uv = [(run / tu, 0.0), ((run + d) / tu, 0.0), ((run + d) / tu, height / tv), (run / tu, height / tv)]
+        mesh.append((v, [[0, 1, 2, 3], [3, 2, 1, 0]], uv))
+        n = max(1, round(d / every))
+        for k in range(n + (1 if q == points[-1] else 0)):
+            t = k / n
             px_, py_ = p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])
-            benches.append(_cuboid(px_, py_, ground(px_, py_) - 0.05, F["post"], F["post"], F["height"] + 0.1,
-                                (q[0] - p[0]) / d, (q[1] - p[1]) / d, (0.5, 0.0, 1.0, 1.0)))
-            k += 1
+            posts.append(_cuboid(px_, py_, ground(px_, py_) - 0.1, F["post"], F["post"], height + 0.15,
+                                 (q[0] - p[0]) / d, (q[1] - p[1]) / d, (0.5, 0.0, 1.0, 1.0)))
         run += d
-    return benches, fence, [line[0][0]] + [q for _, q in line]
+    return mesh, posts
+
+
+def _gate(a, b, ground, height):
+    """A field gate between posts a and b: a galvanised tube frame (top, bottom and a mid rail, end and middle
+    stiles) with mesh filling it (photo by the road). Returns (frame parts, mesh parts)."""
+    d = math.dist(a, b) or 1.0
+    ux, uy = (b[0] - a[0]) / d, (b[1] - a[1]) / d
+    z = max(ground(*a), ground(*b))
+    galv, tube = (0.5, 0.0, 1.0, 1.0), 0.05
+    frame = []
+    for h in (0.15, height / 2, height):
+        frame.append(_beam(a, b, z + h, z + h, tube, tube, galv))
+    for t in (0.0, 0.5, 1.0):
+        x, y = a[0] + ux * d * t, a[1] + uy * d * t
+        frame.append(_cuboid(x, y, ground(x, y) - 0.1, tube, tube, z - ground(x, y) + height + 0.1, ux, uy, galv))
+    for e in (a, b):  # the gate posts, a little taller
+        frame.append(_cuboid(e[0], e[1], ground(*e) - 0.1, 0.08, 0.08, z - ground(*e) + height + 0.3, ux, uy, galv))
+    v = [(a[0], a[1], z + 0.15), (b[0], b[1], z + 0.15), (b[0], b[1], z + height), (a[0], a[1], z + height)]
+    mesh = [(v, [[0, 1, 2, 3], [3, 2, 1, 0]], [(0, 0), (d / FENCE["uv_m"], 0), (d / FENCE["uv_m"], (height - 0.15) / FENCE["uv_h"]),
+                                               (0, (height - 0.15) / FENCE["uv_h"])])]
+    return frame, mesh
+
+
+PAINT_LIFT = 0.008  # painted areas on a plate / the asphalt; their outlines a little higher
+FACADE_TILE_M = {"club": 6.0, "annex": 4.0, "booth": 4.6, "shed": 3.0}  # facade textures repeat every this many metres (textures)
+SCENERY_PREFIXES = ("TREES", "FENCE", "STANDS", "BLDG_", "BOARD", "LAMPS")  # vertical / boxy: only degenerate faces count
+
+
+def _densify(points, step=1.0):
+    out = [tuple(points[0])]
+    for a, b in zip(points, points[1:]):
+        n = max(1, math.ceil(math.dist(a, b) / step))
+        out += [(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n) for k in range(1, n + 1)]
+    return out
+
+
+def _paint(specs, zfn):
+    """Painted areas on the ground (paddock boxes, pit lane strip, lines): {material: [parts]}.
+
+    kind "grid": a quadrilateral (corners TL, TR, BR, BL) cut into `bands` across its depth ([v0, v1, what]):
+    "boxes" = `cols` boxes, every other one filled mint, "blue" = one blue strip; white outlines `line` wide round
+    every box and strip. kind "line": a white / blue polyline `width` wide. zfn(x, y) = the surface height there."""
+    out = {"paint_white": [], "paint_mint": [], "paint_blue": []}
+    lift_fill = lambda x, y: zfn(x, y) + PAINT_LIFT - GROUND_SINK_M + 0.02  # _plate adds GROUND_SINK_M - 0.02
+    lift_line = lambda x, y: zfn(x, y) + 1.5 * PAINT_LIFT
+    for s in specs:
+        if s["kind"] == "line":
+            out[f"paint_{s.get('colour', 'white')}"].append(_ribbon(_densify(s["points"]), s["width"], lift_line))
+            continue
+        tl, tr, br, bl = s["corners"]
+
+        def at(u, v):
+            top = (tl[0] + (tr[0] - tl[0]) * u, tl[1] + (tr[1] - tl[1]) * u)
+            bot = (bl[0] + (br[0] - bl[0]) * u, bl[1] + (br[1] - bl[1]) * u)
+            return (top[0] + (bot[0] - top[0]) * v, top[1] + (bot[1] - top[1]) * v)
+        cells = []
+        for v0, v1, what in s["bands"]:
+            if what == "blue":
+                cells.append(((0.0, 1.0, v0, v1), "paint_blue"))
+            else:
+                n = s["cols"]
+                cells += [((k / n, (k + 1) / n, v0, v1), "paint_mint" if k % 2 == 0 else None) for k in range(n)]
+        for (u0, u1, v0, v1), fill in cells:
+            quad = [at(u0, v0), at(u1, v0), at(u1, v1), at(u0, v1)]
+            if fill:
+                out[fill].append(_plate(quad, lift_fill, cell=0.5))
+            for a, b in zip(quad, quad[1:] + quad[:1]):
+                out["paint_white"].append(_ribbon(_densify([a, b]), s["line"], lift_line))
+    return out
+
+
+def _building(spec, ground):
+    """A building from its footprint: walls from below the ground to `height` above its highest corner (facade
+    material, u in FACADE_TILE_M metres along the walls; the `sign_edge` wall gets <facade>_sign mapped once across
+    it), a flat roof. Returns ({material: [parts]}, closed footprint for the collision)."""
+    fp = [tuple(p) for p in spec["footprint"]]
+    sign = spec.get("sign_edge")  # edge k joins footprint points k and k + 1, as given
+    if sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(fp, fp[1:] + fp[:1])) < 0:
+        fp = fp[::-1]  # counter-clockwise: walls face out; edge k of the given order is edge n - 2 - k now
+        if sign is not None:
+            sign = (len(fp) - 2 - sign) % len(fp)
+    gz = [ground(*p) for p in fp]
+    base, top = min(gz) - 0.2, max(gz) + spec["height"]
+    facade = spec.get("facade", "club")
+    roof_mat = spec.get("roof", "roof")
+    out = {facade: [], roof_mat: []}
+    run = 0.0
+    for k, (a, b) in enumerate(zip(fp, fp[1:] + fp[:1])):
+        d = math.dist(a, b)
+        v = [(a[0], a[1], base), (b[0], b[1], base), (b[0], b[1], top), (a[0], a[1], top)]
+        if k == sign:
+            out.setdefault(facade + "_sign", []).append((v, [[0, 1, 2, 3]], [(0, 0), (1, 0), (1, 1), (0, 1)]))
+        else:
+            t = FACADE_TILE_M.get(facade, 4.0)
+            out[facade].append((v, [[0, 1, 2, 3]], [(run / t, 0), ((run + d) / t, 0), ((run + d) / t, 1), (run / t, 1)]))
+        run += d
+    out[roof_mat].append(_plate(fp, lambda x, y: top - GROUND_SINK_M + 0.02, cell=100.0))
+    aw = spec.get("awning")  # a sloping canopy over the sign wall's windows (the booth's, brown sheet)
+    if aw and sign is not None:
+        a, b = fp[sign], fp[(sign + 1) % len(fp)]
+        d = math.dist(a, b)
+        ox, oy = (b[1] - a[1]) / d * aw["depth"], -(b[0] - a[0]) / d * aw["depth"]  # out of the wall (CCW footprint)
+        z1, z2 = top - aw.get("from_top", 0.3), top - aw.get("from_top", 0.3) - aw["drop"]
+        v = [(a[0], a[1], z1), (b[0], b[1], z1), (b[0] + ox, b[1] + oy, z2), (a[0] + ox, a[1] + oy, z2)]
+        out.setdefault(aw.get("material", "roof_red"), []).append(
+            (v, [[0, 3, 2, 1], [0, 1, 2, 3]], [(0, 0), (d / 4, 0), (d / 4, aw["depth"] / 4), (0, aw["depth"] / 4)]))
+    return out, fp + [fp[0]]
+
+
+def _board(spec, ground):
+    """Timing board: a screen box on two posts, the screen (timing_board texture) on the side facing `facing`."""
+    x, y = spec["x"], spec["y"]
+    fx, fy = spec["facing"]
+    fl = math.hypot(fx, fy)
+    fx, fy = fx / fl, fy / fl
+    ux, uy = fy, -fx  # along the board, so that ux, uy then the facing make a right turn: the screen faces fx, fy
+    w, b, t, depth = spec["width"], spec["bottom"], spec["top"], 0.2
+    z = ground(x, y)
+    metal = (0.0, 0.0, 0.5, 1.0)  # lamp atlas: metal half
+    parts = [_cuboid(x, y, z + b, w, depth, t - b, ux, uy, metal)]
+    for e in (-1, 1):  # each post from its own ground (on a slope they differ) up into the screen box
+        px_, py_ = x + e * (w / 2 - 0.15) * ux, y + e * (w / 2 - 0.15) * uy
+        g = ground(px_, py_) - 0.1
+        parts.append(_cuboid(px_, py_, g, 0.12, 0.12, z + b + 0.05 - g, ux, uy, metal))
+    cx, cy = x + fx * (depth / 2 + 0.01), y + fy * (depth / 2 + 0.01)
+    screen = [(cx - ux * w / 2 * 0.95, cy - uy * w / 2 * 0.95, z + b + 0.05),
+              (cx + ux * w / 2 * 0.95, cy + uy * w / 2 * 0.95, z + b + 0.05),
+              (cx + ux * w / 2 * 0.95, cy + uy * w / 2 * 0.95, z + t - 0.05),
+              (cx - ux * w / 2 * 0.95, cy - uy * w / 2 * 0.95, z + t - 0.05)]
+    if (screen[1][0] - screen[0][0]) * fy - (screen[1][1] - screen[0][1]) * fx < 0:  # wind it to face fx, fy
+        screen = [screen[1], screen[0], screen[3], screen[2]]
+    return parts, [(screen, [[0, 1, 2, 3]], [(0, 0), (1, 0), (1, 1), (0, 1)])]
+
+
+def _lamps(lamps, ground):
+    """Lamp posts [x, y, height]: a slim pole and a round-ish luminaire on top (lamp atlas: metal, white)."""
+    parts = []
+    for x, y, h in lamps:
+        z = ground(x, y) - 0.1
+        parts.append(_cuboid(x, y, z, 0.12, 0.12, h + 0.1, 1.0, 0.0, (0.0, 0.0, 0.5, 1.0)))
+        parts.append(_cuboid(x, y, z + h + 0.1, 0.45, 0.45, 0.4, 1.0, 0.0, (0.5, 0.0, 1.0, 1.0)))
+    return parts
+
+
+RISER_M = 0.17
+
+
+def _stairs(spec, ground):
+    """Concrete steps from `bottom` up to `top` (terrain heights at both ends), `width` wide, riser ~RISER_M; and a
+    red / white railing on both sides (posts every ~1.5 m, a top and a mid rail, 1.0 m above the steps).
+    Returns (steps, railing) parts: steps in the concrete material, the railing in its striped texture."""
+    (ax, ay), (bx, by) = spec["bottom"], spec["top"]
+    run = math.dist((ax, ay), (bx, by))
+    ux, uy = (bx - ax) / run, (by - ay) / run
+    za, zb = ground(ax, ay), ground(bx, by) + spec.get("top_lift", 0.0)  # top_lift: up to a floor
+    n = max(1, round(abs(zb - za) / RISER_M))
+    tread, rise, w = run / n, (zb - za) / n, spec["width"]
+    steps = []
+    for k in range(n):
+        cx, cy = ax + ux * tread * (k + 0.5), ay + uy * tread * (k + 0.5)
+        h = za + rise * (k + 1)  # top of step k
+        low = min(ground(cx - ux * tread / 2, cy - uy * tread / 2), ground(cx + ux * tread / 2, cy + uy * tread / 2))
+        steps.append(_cuboid(cx, cy, low - 0.1, tread, w, h - low + 0.1, ux, uy, (0.0, 0.0, 1.0, 1.0)))
+    rail = []
+    nx, ny = -uy, ux
+    posts = max(2, round(run / 1.5) + 1)
+    for side in (1, -1):
+        ox, oy = side * (w / 2 + 0.05) * nx, side * (w / 2 + 0.05) * ny
+        for k in range(posts):
+            t = k / (posts - 1)
+            px_, py_ = ax + ux * run * t + ox, ay + uy * run * t + oy
+            zt = za + (zb - za) * t
+            rail.append(_cuboid(px_, py_, ground(px_, py_) - 0.1, 0.05, 0.05, zt - ground(px_, py_) + 1.1, ux, uy,
+                                (0.0, 0.0, 0.02, 1.0)))
+        for hgt in (1.0, 0.5):  # rails: a sloped tube from bottom to top, red / white along it
+            p, q = (ax + ox, ay + oy, za + hgt), (bx + ox, by + oy, zb + hgt)
+            th = 0.04
+            v = [(p[0], p[1], p[2] - th), (q[0], q[1], q[2] - th), (q[0], q[1], q[2] + th), (p[0], p[1], p[2] + th)]
+            rail.append((v, [[0, 1, 2, 3], [3, 2, 1, 0]], [(0, 0), (run / RAIL_STRIPE_M, 0),
+                                                            (run / RAIL_STRIPE_M, 1), (0, 1)]))
+    return steps, rail
+
+
+RAIL_STRIPE_M = 1.0  # one red + one white stripe per metre of rail (texture railing)
 
 
 def _ribbon(points, width, zfn):
@@ -783,19 +1027,70 @@ def build(cfg, pts, ground=None, features=None, photo=None, photo_near=None):
         objects += _chunks(f"TYRES_{c.split('_')[1].upper()}", c, parts)
     if (features or {}).get("trees"):  # scenery only: no digit prefix = no physics; lit from above (normal_up)
         objects.append({**_merge("TREES", "tree", [_trees(features["trees"], ground_z)]), "normal_up": True})
-    benches, fences = [], []
+    benches, fences, stand_posts = [], [], []  # the fence posts are galvanised like the rest (FENCE_POSTS)
     for st in (features or {}).get("stands", []):  # benches + fence; the fence also gets a collision box (1WALL)
         p0 = st["points"][len(st["points"]) // 2]
         k = min(range(n), key=lambda i: (samples[i][0] - p0[0]) ** 2 + (samples[i][1] - p0[1]) ** 2)
         (ax, ay), (bx, by) = st["points"][0], st["points"][-1]
         side = (-(by - ay)) * (p0[0] - samples[k][0]) + (bx - ax) * (p0[1] - samples[k][1])  # left normal . away
-        b, f, line = _stands(st["points"], ground_z, 1 if side > 0 else -1)
+        b, f, line, posts = _stands(st["points"], ground_z, 1 if side > 0 else -1, st.get("benches"),
+                                    st.get("fence_offset"))
         benches += b
         fences += f
+        stand_posts += posts
         walls += _barrier(line, ground_z, FENCE["height"], 0.1)
     if benches:
         objects += [_merge("STANDS", "bench", benches), _merge("FENCE", "fence", fences)]
-        objects = [o if o["name"] != "1WALL" else _merge("1WALL", "collider", walls) for o in objects]
+    feats = features or {}
+    extra_mesh, extra_wire, extra_posts = [], [], stand_posts
+    for fc in feats.get("fences", []):  # fences round the corner behind the stands (photos), collision in 1WALL
+        mesh, posts = _fence(fc["points"], ground_z, fc["height"], fc.get("post_every"),
+                             (None, None) if fc.get("kind", "mesh") == "mesh" else (2.0, 1.4))
+        (extra_mesh if fc.get("kind", "mesh") == "mesh" else extra_wire).extend(mesh)
+        extra_posts += posts
+        walls += _barrier(fc["points"], ground_z, fc["height"], 0.1)
+    for g in feats.get("gates", []):
+        frame, mesh = _gate(g["a"], g["b"], ground_z, g["height"])
+        extra_posts += frame
+        extra_mesh += mesh
+        walls += _barrier([g["a"], g["b"]], ground_z, g["height"], 0.1)
+    if extra_mesh:
+        objects.append(_merge("FENCE_CORNER", "fence", extra_mesh))
+    if extra_wire:
+        objects.append(_merge("FENCE_WIRE", "fence_wire", extra_wire))
+    if extra_posts:
+        objects.append(_merge("FENCE_POSTS", "lamp", extra_posts))
+    # painted areas (paddock boxes, pit lane strip, lines) on the asphalt / the plates, like the plates' own surface
+    plate_z = lambda x, y: max(z_at(x, y), ground_z(x, y)) + GROUND_SINK_M - 0.02
+    for mat, parts in _paint(feats.get("paint", []), plate_z).items():
+        if parts:
+            objects.append(_merge(f"LINES_{mat.split('_')[1].upper()}_PAINT", mat, parts))
+    blds = {}
+    for b in feats.get("buildings", []):  # buildings: one object per material (BLDG_<material>), collision in 1WALL
+        parts, outline = _building(b, ground_z)
+        for mat, ps in parts.items():
+            blds.setdefault(mat, []).extend(ps)
+        walls += _barrier(outline, ground_z, b["height"], 0.3)
+    objects += [_merge(f"BLDG_{mat.upper()}", mat, ps) for mat, ps in blds.items() if ps]
+    board_frames, screens = [], []
+    for bd in feats.get("boards", []):
+        f, s = _board(bd, ground_z)
+        board_frames += f
+        screens += s
+        walls += _barrier([(bd["x"] - 0.1 * bd["facing"][1], bd["y"] + 0.1 * bd["facing"][0]),
+                           (bd["x"] + 0.1 * bd["facing"][1], bd["y"] - 0.1 * bd["facing"][0])], ground_z, bd["top"], 0.3)
+    if board_frames:
+        objects += [_merge("BOARD_FRAME", "lamp", board_frames), _merge("BOARD_SCREEN", "timing_board", screens)]
+    lamp_parts = _lamps(feats.get("lamps", []), ground_z)
+    for st in feats.get("stairs", []):
+        steps, rail = _stairs(st, ground_z)
+        if st.get("rail") == "galv":  # plain galvanised railing (the booth's), lamp atlas light half
+            rail = [(v, f, [(0.75, 0.5)] * len(v)) for v, f, _ in rail]
+        objects += [_merge(f"BLDG_STAIRS_{st['name'].upper()}", st.get("steps", "concrete"), steps),
+                    _merge(f"BLDG_RAIL_{st['name'].upper()}", "lamp" if st.get("rail") == "galv" else "railing", rail)]
+    if lamp_parts:
+        objects.append(_merge("LAMPS", "lamp", lamp_parts))
+    objects = [o if o["name"] != "1WALL" else _merge("1WALL", "collider", walls) for o in objects]
 
     # painted markings (visual only, lifted like the edge lines; the chequered line a little higher where they cross)
     on_road = lambda dz: (lambda x, y: z_at(x, y) + GROUND_SINK_M + dz)
@@ -1066,7 +1361,7 @@ def validate(cfg, pts, geo):
             errors.append(f"1ROAD has {len(o['faces'])} quads for {len(sm)} samples - asphalt has holes")
         wall = o["name"].endswith("WALL")  # vertical sides are fine, upside-down not
         # tyre bulges face down below their widest point, tree planes are vertical and double-sided: only degenerate counts
-        round_ = o["name"].startswith("TYRES_") or o["name"] in ("TREES", "FENCE", "STANDS")
+        round_ = o["name"].startswith(("TYRES_",) + SCENERY_PREFIXES)
         for f in o["faces"]:
             nx, ny, nz = _normal(o["verts"], f)
             area = math.sqrt(nx * nx + ny * ny + nz * nz)

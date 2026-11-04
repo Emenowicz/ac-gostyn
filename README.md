@@ -202,6 +202,15 @@ wzdłuż skarpy na południu, skrót zachodni, przegroda w nawrocie C), inaczej 
 `"stands"`: linie trybun wzdłuż prostej startowej – rząd ławek (czerwone deski na ciemnych nogach) i za nimi, od strony
 z dala od toru, siatkowe ogrodzenie 1,8 m ze słupkami (`STANDS`, `FENCE` z teksturą siatki z przezroczystością; siatka
 dostaje też kolizję w `1WALL`); obrys ławek z ortofotomapy 5 cm, wygląd ze zdjęć toru.
+`"paint"`: malunki na padoku – `kind: "grid"` (czworokąt pocięty na pasy: dwa rzędy po 10 pól, co drugie miętowe,
+między nimi niebieski pas alei, białe obrysy) i `kind: "line"`; leżą 1 cm nad płytą (`LINES_*_PAINT`).
+`"buildings"`: obrys (z dachu na ortofotomapie), wysokość, elewacja (`club` – gładki biały główny budynek z wąskimi
+oknami u góry; `annex` – parterowa dobudówka przed nim: czarny pas pod dachem, różowy cokół; `booth` – szare panele
+z pasem okien; `shed` – ciemna blacha z bramą roletową), `roof` – materiał dachu (np. `roof_red`), `sign_edge` –
+ściana z szyldem (u dobudówki od strony padoku: „Kartodrom Gostyń”, zielone schodkowe kwadraty, rolety, plakaty,
+drzwi – wg zdjęcia z padoku; krawędź k łączy punkty k i k+1); płaski dach, kolizja w `1WALL` (`BLDG_*`). `"boards"`: tablica
+wyników na dwóch słupach za ostatnimi oponami po lewej na prostej startowej. `"lamps"`: `[x, y, wysokość]` – latarnie (klosze widać na
+ortofotomapie). `"stairs"`: schody z padoku na nasyp trybun z czerwono-białą barierką po obu stronach.
 `"trees"`: `[x, y, promień korony, wysokość]` – drzewa 3D (`TREES`, bez fizyki): po trzy skrzyżowane pionowe płaszczyzny
 z teksturą z przezroczystością (`ksPerPixelAT`, atlas czterech wariantów z `textures.tree_atlas`), oświetlone jak
 grunt. Korony z liśćmi wykryte na zdjęciu po kolorze i fakturze, drzewa bez liści na zdjęciu z kwietnia (szpaler przy

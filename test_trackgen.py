@@ -185,7 +185,7 @@ else:
         assert nm.min() >= 0 and nm.max() <= 1 and nm[..., 2].min() > 0.5, tname
         # across the tile seam the height changes no more than between interior neighbours (the kerb stripes'
         # hard edges along v are excluded: they repeat every stripe, also across the seam)
-        for axis in (0, 1) if tname != "kerb" else (1,):
+        for axis in textures.SEAM_AXES.get(tname, (0, 1)):
             seam = np.abs(np.take(height, 0, axis) - np.take(height, -1, axis)).mean()
             inner = np.abs(np.diff(height, axis=axis)).mean()
             assert seam < 3 * inner, (tname, axis, seam, inner)
@@ -243,19 +243,46 @@ except AssertionError as e:
 
 # trees: three crossed vertical planes each, double-sided, standing on the ground; the sprite atlas has alpha
 tv, tf, tu = trackgen._trees([[0.0, 0.0, 2.0, 8.0], [10.0, 5.0, 3.0, 12.0]], lambda x, y: 1.0)
-assert len(tf) == 2 * 3 * 2 and len(tv) == 2 * 3 * 4, (len(tf), len(tv))
-assert min(v[2] for v in tv) == 0.9 and max(v[2] for v in tv[:12]) == 8.9, "0.1 m into the ground, h tall"
+assert len(tf) == 2 * 4 * 2 and len(tv) == 2 * 4 * 4, (len(tf), len(tv))
+assert min(v[2] for v in tv) == 0.9 and max(v[2] for v in tv[:16]) == 8.9, "0.1 m into the ground, h tall"
 assert all(abs(trackgen._normal(tv, f)[2]) < 1e-9 for f in tf), "vertical planes"
 atlas = textures.tree_atlas(w=64, h=128)
 assert atlas.shape == (128, 64 * trackgen.TREE_VARIANTS, 4) and set(np.unique(atlas[..., 3])) <= {0.0, 1.0}
 assert 0.15 < atlas[..., 3].mean() < 0.6, atlas[..., 3].mean()
 
 # stands: benches along the line, the fence `away` behind them (+left normal here: y > 0), 1.8 m tall, posts
-sb, sf, sline = trackgen._stands([[0.0, 0.0], [10.0, 0.0]], lambda x, y: 0.0, 1)
+sb, sf, sline, sposts = trackgen._stands([[0.0, 0.0], [10.0, 0.0]], lambda x, y: 0.0, 1)
+assert sposts, "fence posts"
 assert len(sb) >= 3 * 3 and all(abs(p[1] - trackgen.FENCE["offset"]) < 1e-9 for p in sline), sline
+rows_y = {round(sum(v[1] for v in part[0]) / len(part[0]), 2) for part in sb if part[2][0][0] == 0.0}  # planks (wood uv)
+assert any(y < 0 for y in rows_y) and any(y > 0 for y in rows_y), ("two rows of benches", rows_y)
 assert max(v[2] for v, _, _ in sf for v in v) == trackgen.FENCE["height"] - 0.05
 seat_tops = {round(max(v[2] for v in part[0]), 3) for part in sb}
 assert trackgen.BENCH["seat"] in seat_tops, seat_tops
+
+# buildings: walls face out whichever way the footprint runs, the sign on the edge given, roof at height, collision ring
+for fp in ([[0, 0], [6, 0], [6, 4], [0, 4]], [[0, 4], [6, 4], [6, 0], [0, 0]]):  # CCW, CW
+    parts, ring = trackgen._building({"footprint": fp, "height": 3.0, "facade": "booth", "sign_edge": 0},
+                                     lambda x, y: 0.0)
+    assert len(parts["booth"]) == 3 and len(parts["booth_sign"]) == 1 and ring[0] == ring[-1]
+    sv = parts["booth_sign"][0][0]
+    assert {(round(v[0]), round(v[1])) for v in sv} == {tuple(fp[0]), tuple(fp[1])}, "sign on edge 0 as given"
+    for v, f, _ in parts["booth"] + parts["booth_sign"]:
+        nx, ny, _ = trackgen._normal(v, f[0])
+        cx, cy = sum(p[0] for p in v) / 4, sum(p[1] for p in v) / 4
+        assert nx * (cx - 3) + ny * (cy - 2) > 0, "wall faces out"
+    rv = parts["roof"][0][0]
+    assert all(abs(v[2] - 3.0) < 1e-9 for v in rv), "flat roof at the height"
+# paint: a 2-band grid -> mint on every other box, a blue strip, white outlines, all just above the surface
+pt = trackgen._paint([{"kind": "grid", "corners": [[0, 2], [4, 2], [4, 0], [0, 0]], "cols": 4,
+                       "bands": [[0, 0.5, "boxes"], [0.5, 1, "blue"]], "line": 0.05}], lambda x, y: 1.0)
+assert len(pt["paint_mint"]) == 2 and len(pt["paint_blue"]) == 1 and len(pt["paint_white"]) == 4 * 4 + 4
+assert all(1.0 < v[2] < 1.02 for k in pt for part in pt[k] for v in part[0])
+# stairs: steps rising from the bottom to the top ground height, railings on both sides
+stp, rl = trackgen._stairs({"bottom": [0, 0], "top": [5, 0], "width": 1.2}, lambda x, y: 0.2 * x)
+tops = [max(v[2] for v in s_[0]) for s_ in stp]
+assert len(stp) == round(1.0 / trackgen.RISER_M) and tops == sorted(tops) and abs(tops[-1] - 1.0) < 1e-9, tops
+assert len(rl) == 2 * (round(5 / 1.5) + 1) + 4
 
 # KN5 writer: a one-quad track + a start dummy round-trips through the layout ksEditor writes; AC axes (x, z, -y),
 # uv (u, -v), winding kept (face normal along the vertex normal), tangent orthogonal to the normal
