@@ -93,9 +93,20 @@ build/ortho_overlay.svg                   model na ortofotomapie – otwórz w p
    | `paint_white` | `ksPerPixelNM` | `paint_white`, `paint_white_nm` | linie krawędzi i korytarzy (`LINES_WHITE`, `LINES_LANES`) |
    | `paint_mint` | `ksPerPixelNM` | `paint_mint`, `paint_mint_nm` | pola startowe (`LINES_GRID`) |
    | `chequer` | `ksPerPixelNM` | `chequer`, `chequer_nm` | linia startu i mety (`LINES_START`) |
-   | `ortho_near` | `ksPerPixel` | `ortho_near` | pobocze i teren w okolicy toru (ortofotomapa 5 cm, `1GRASS`, `2GRASS`) |
-   | `ortho` | `ksPerPixel` | `ortho` | dalszy teren (`3GRASS`) |
+   | `ortho_near` | `ksMultilayer_fresnel_nm4` | `ortho_near`, `ortho_near_mask`, detale – niżej | pobocze i teren w okolicy toru (ortofotomapa 5 cm, `1GRASS`, `2GRASS`) |
+   | `ortho` | `ksMultilayer_fresnel_nm4` | `ortho`, `ortho_mask`, detale – niżej | dalszy teren (`3GRASS`) |
    | `collider` | `ksPerPixelAT` | `collider` (w pełni przezroczysta) | kolizja band `1WALL`: niewidoczna, tylko fizyka |
+
+   **Ortofotomapy z detalem.** Z bliska piksel 5 cm jest rozmyty, więc na zdjęcie nakłada się powtarzalny detal:
+   trawa (`grass_detail`, kafel 1,5 m) albo goła ziemia – wytarte pobocza, piach, żwir (`soil_detail`, kafel 2 m).
+   Który detal gdzie, mówi maska `<zdjęcie>_mask.png` liczona ze zdjęcia: R = trawa, G = bez trawy, B = A = 0.
+   Kolor zostaje ze zdjęcia, detal (szarawy mnożnik o średniej 0,8) dodaje źdźbła, grudy i kamyki. Komplet ustawień
+   z mnożnikami UV wyliczonymi z zasięgu zdjęcia zapisuje build do `build/fbx/ksEditor_ortho.txt`:
+   `txDiffuse` = zdjęcie, `txMask` = maska, `txDetailR` = `grass_detail`, `txDetailG` = `soil_detail`,
+   `txNormalR/G` = ich `_nm`, `multR/multG` z pliku, `magicMult` = 1,25. Trawa i ziemia są matowe:
+   `ksSpecular` = 0 i fresnel 0, inaczej pod niskim kątem pobocze robi się szarobiałe. **Nie sprawdzone jeszcze w AC**:
+   gdyby pobocze wyszło ciemniejsze lub jaśniejsze niż zdjęcie, popraw `magicMult`; bez map normalnych wystarczy
+   `ksMultilayer`. Podgląd w `.blend` pokazuje zdjęcie już z detalem (FBX niesie samo zdjęcie).
 
    Mapy normalnych są w konwencji OpenGL (zielony = +v). Gdyby faktura wyglądała jak wklęsła zamiast wypukłej,
    odwróć kanał zielony (albo ustaw mnożnik normalnych na ujemny).

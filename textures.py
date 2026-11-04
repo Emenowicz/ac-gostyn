@@ -130,6 +130,83 @@ def tyre(colour, size=256, seed=70):
     return np.clip(albedo, 0, 1), 0.6 * grain - 0.8 * smoothstep(1.0, 1.8, worn)
 
 
+def noise_dir(shape, sig_along, sig_across, angle, seed):
+    """Tileable noise stretched along `angle` (radians from +x): streaks sig_along long, sig_across wide (pixels)."""
+    white = np.random.default_rng(seed).standard_normal(shape)
+    fy, fx = np.fft.fftfreq(shape[0])[:, None], np.fft.fftfreq(shape[1])[None, :]
+    fa, fc = fx * np.cos(angle) + fy * np.sin(angle), -fx * np.sin(angle) + fy * np.cos(angle)
+    out = np.real(np.fft.ifft2(np.fft.fft2(white) * np.exp(-2 * np.pi ** 2 * ((sig_along * fa) ** 2 + (sig_across * fc) ** 2))))
+    return (out - out.mean()) / (out.std() + 1e-12)
+
+
+# Detail textures for the orthophoto (ksMultilayer in AC): grey-ish multipliers around DETAIL_MEAN, tiled every
+# tile_m metres over the photo, chosen per pixel by the photo's mask (R = grass, G = bare soil). The photo keeps the
+# colour; the detail only adds what 5 cm pixels can't show close up (blades, clods, pebbles).
+DETAIL_MEAN = 0.8
+
+
+def grass_detail(size=512, seed=100):
+    """Short grass seen from a kart: blades in all directions, darker gaps, light dry tips (1.5 m tile, 3 mm/px)."""
+    s = (size, size)
+    blades = sum(noise_dir(s, 9, 0.9, a, seed + k) for k, a in enumerate((0.3, 1.2, 2.0, 2.7))) / 2
+    clumps, gaps = noise(s, 18, seed + 10), noise(s, 3, seed + 11)
+    tips = smoothstep(1.2, 2.2, blades)
+    v = 0.18 * blades + 0.06 * clumps - 0.12 * smoothstep(1.0, 2.0, -gaps)
+    tint = mix(np.full(s + (3,), (0.97, 1.03, 0.96)), (1.08, 1.04, 0.86), 0.6 * tips)  # dry tips a bit yellow
+    albedo = np.clip(DETAIL_MEAN * (1 + v)[..., None] * tint, 0, 1)
+    return albedo, blades + 0.5 * clumps - 1.0 * smoothstep(1.0, 2.0, -gaps)
+
+
+def soil_detail(size=512, seed=110):
+    """Bare dry soil / worn verge: clods, small pebbles, fine sand, shallow ruts (2 m tile, 4 mm/px)."""
+    s = (size, size)
+    grain, clods, pebbles, ruts = noise(s, 0.9, seed), noise(s, 7, seed + 1), noise(s, 1.6, seed + 2), \
+        noise_dir(s, 90, 6, 0.4, seed + 3)
+    stone = smoothstep(1.8, 2.6, pebbles)
+    v = 0.06 * grain + 0.10 * clods + 0.22 * stone - 0.08 * smoothstep(0.8, 1.8, -ruts)
+    tint = mix(np.full(s + (3,), (1.02, 1.0, 0.97)), (0.96, 0.97, 1.03), stone)  # pebbles a little greyer
+    albedo = np.clip(DETAIL_MEAN * (1 + v)[..., None] * tint, 0, 1)
+    return albedo, 0.4 * grain + 0.8 * clods + 1.5 * stone - 0.6 * smoothstep(0.8, 1.8, -ruts)
+
+
+# name -> (maker, normal-map strength, tile in metres)
+DETAILS = {"grass_detail": (grass_detail, 3.0, 1.5), "soil_detail": (soil_detail, 3.0, 2.0)}
+
+
+def _box_blur(a, r):
+    """Box blur of radius r pixels along both axes (cumulative sums, edges clamped)."""
+    for axis in (0, 1):
+        pad = [(0, 0)] * a.ndim
+        pad[axis] = (r + 1, r)
+        c = np.cumsum(np.pad(a, pad, mode="edge"), axis=axis)
+        a = (np.take(c, range(2 * r + 1, c.shape[axis]), axis) - np.take(c, range(0, c.shape[axis] - 2 * r - 1), axis)) / (2 * r + 1)
+    return a
+
+
+def ortho_mask(rgb, blur_px=2):
+    """Detail mask for an orthophoto (h, w, 3, 0..1): R = grass (clearly green), G = no grass (bare soil, sand, dry
+    worn verge, gravel - also asphalt, hidden under the track anyway), B = A = 0 (unused). Soft edges."""
+    greenness = rgb[..., 1] - np.maximum(rgb[..., 0], rgb[..., 2])
+    grass = smoothstep(0.004, 0.035, greenness)
+    for _ in range(2):  # two box passes ~ a Gaussian
+        grass = _box_blur(grass, blur_px)
+    z = np.zeros_like(grass)
+    return np.dstack((grass, 1 - grass, z, z))
+
+
+def write_png(path, rgba):
+    """(h, w, 4) 0..1, row 0 = bottom -> 8-bit RGBA PNG (straight alpha, written as is - no premultiplying)."""
+    import struct
+    import zlib
+    h, w, _ = rgba.shape
+    px = np.round(np.clip(rgba[::-1], 0, 1) * 255).astype(np.uint8)
+    raw = np.concatenate((np.zeros((h, 1), np.uint8), px.reshape(h, w * 4)), axis=1).tobytes()
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+
+
 # name -> (maker, normal-map strength); trackgen's material names
 SURFACES = {"road": (asphalt, 6.0), "concrete": (concrete, 4.0), "kerb": (kerb_stripes, 3.0),
             "kerb_apron": (kerb_apron, 4.0), "kerb_concrete": (kerb_concrete, 4.0), "paint_white": (paint_white, 2.0),

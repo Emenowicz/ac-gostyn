@@ -177,5 +177,18 @@ else:
             seam = np.abs(np.take(height, 0, axis) - np.take(height, -1, axis)).mean()
             inner = np.abs(np.diff(height, axis=axis)).mean()
             assert seam < 3 * inner, (tname, axis, seam, inner)
+    # orthophoto detail textures: tileable multipliers around DETAIL_MEAN; the mask splits grass from bare ground
+    for tname, (make, strength, tile) in textures.DETAILS.items():
+        albedo, height = make()
+        assert tile > 0 and abs(albedo.mean() - textures.DETAIL_MEAN) < 0.05, (tname, albedo.mean())
+        for axis in (0, 1):
+            seam = np.abs(np.take(height, 0, axis) - np.take(height, -1, axis)).mean()
+            assert seam < 3 * np.abs(np.diff(height, axis=axis)).mean(), (tname, axis)
+    photo_px = np.zeros((40, 40, 3))
+    photo_px[:, :20] = (0.25, 0.40, 0.18)  # grass
+    photo_px[:, 20:] = (0.55, 0.48, 0.36)  # dry bare soil
+    m = textures.ortho_mask(photo_px)
+    assert m.shape == (40, 40, 4) and np.allclose(m[..., 0] + m[..., 1], 1) and not m[..., 2:].any()
+    assert m[:, :10, 0].min() > 0.99 and m[:, 30:, 1].min() > 0.99, "mask: grass in R, bare soil in G"
 
 print("ok", f"{geo['length']:.2f} m,", sum(len(o['faces']) for o in geo['objects']), "faces")

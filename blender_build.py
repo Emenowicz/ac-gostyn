@@ -17,6 +17,8 @@ with open(src) as f:
 # Road, concrete, kerbs and lines get procedural textures + normal maps (textures.py). What is left here is flat:
 COLORS = {"grass": (0.18, 0.40, 0.12), "ground": (0.22, 0.36, 0.15)}
 INVISIBLE = {"collider"}  # fully transparent (alpha 0): collision-only objects, shader ksPerPixelAT in ksEditor
+PHOTOS = ("ortho", "ortho_near")  # orthophotos: + mask and detail textures (ksMultilayer in ksEditor)
+MATTE = set(PHOTOS) | {"grass", "ground"}
 RED, YELLOW = (0.72, 0.07, 0.06), (0.93, 0.72, 0.08)
 STRIPES = {}  # stripes per tile, axis (0 = u / image x, 1 = v / image y)
 
@@ -45,6 +47,103 @@ def save_image(name, rgb, colorspace="sRGB"):
     return img
 
 
+def photo_mask(name, img):
+    """<name>_mask.png next to the photo (R = grass, G = bare soil; half the photo's resolution is plenty)."""
+    import numpy as np
+    w, h = img.size
+    px = np.empty(w * h * 4, np.float32)
+    img.pixels.foreach_get(px)
+    rgb = px.reshape(h, w, 4)[..., :3]
+    rgb = rgb.reshape(h // 2, 2, w // 2, 2, 3).mean(axis=(1, 3))
+    textures.write_png(os.path.join(texdir, name + "_mask.png"), textures.ortho_mask(rgb))
+
+
+def detail_textures():
+    """grass_detail / soil_detail (+ _nm) into texture/; returns {name: (image, normal image, tile_m)}."""
+    out = {}
+    for dname, (make, strength, tile) in textures.DETAILS.items():
+        albedo, height = make()
+        out[dname] = (save_image(dname, albedo), save_image(dname + "_nm", textures.normal_map(height, strength),
+                                                             "Non-Color"), tile)
+    return out
+
+
+def photo_settings(details):
+    """build/fbx/ksEditor_ortho.txt: shader settings for the photo materials (the UV multipliers depend on the
+    photo's extent, so they are computed here instead of written into the README)."""
+    lines = []
+    for name, key in (("ortho", "photo"), ("ortho_near", "photo_near")):
+        if not data.get(key):
+            continue
+        with open(os.path.splitext(data[key])[0] + ".json") as f:
+            uv = json.load(f)["uv"]
+        per_m = (abs(uv[0][0]) + abs(uv[1][1])) / 2  # UV units per metre (the 4096^2 photo is ~10 % anisotropic)
+        mult = {d: round(1 / (per_m * tile), 1) for d, (_, _, tile) in details.items()}
+        lines += [f"[{name}]  shader ksMultilayer_fresnel_nm4 (or ksMultilayer without the normals)",
+                  f"  txDiffuse = {name}.png   txMask = {name}_mask.png  (R = grass, G = bare soil, B = A = 0)",
+                  "  txDetailR = grass_detail.png   txDetailG = soil_detail.png   txDetailB = txDetailA = grass_detail.png",
+                  "  txNormalR = grass_detail_nm.png   txNormalG = soil_detail_nm.png   (nm4 only)",
+                  f"  multR = {mult['grass_detail']}   multG = {mult['soil_detail']}   multB = multA = {mult['grass_detail']}",
+                  f"  magicMult = {round(1 / textures.DETAIL_MEAN, 2)}  (detail textures average {textures.DETAIL_MEAN};"
+                  " darker / lighter than the photo in AC -> change this)",
+                  "  ksSpecular = 0, fresnelC = 0, fresnelMaxLevel = 0  (matte: no sheen at grazing angles)", ""]
+    with open(os.path.join(os.path.dirname(os.path.abspath(out)), "ksEditor_ortho.txt"), "w") as f:
+        f.write("\n".join(lines))
+
+
+def preview_details(details):
+    """.blend / preview only (after the FBX export, which wants the photo wired straight into Base Color): photo x
+    detail picked by the mask, detail normals - what ksMultilayer should show in AC."""
+    import numpy as np
+    for name in PHOTOS:
+        mat = materials.get(name)
+        if not mat:
+            continue
+        nodes, links = mat.node_tree.nodes, mat.node_tree.links
+        bsdf = next(n for n in nodes if n.type == "BSDF_PRINCIPLED")
+        photo = next(n for n in nodes if n.type == "TEX_IMAGE")
+        mask = nodes.new("ShaderNodeTexImage")
+        mask.image = bpy.data.images.load(os.path.join(texdir, name + "_mask.png"))
+        mask.image.colorspace_settings.name = "Non-Color"
+        sep = nodes.new("ShaderNodeSeparateColor")
+        links.new(mask.outputs["Color"], sep.inputs["Color"])
+        pos = nodes.new("ShaderNodeNewGeometry")
+        picked = {}
+        for dname, (img, nimg, tile) in details.items():
+            mp = nodes.new("ShaderNodeMapping")
+            mp.inputs["Scale"].default_value = (1 / tile, 1 / tile, 1 / tile)
+            links.new(pos.outputs["Position"], mp.inputs["Vector"])
+            t, nt = nodes.new("ShaderNodeTexImage"), nodes.new("ShaderNodeTexImage")
+            t.image, nt.image = img, nimg
+            links.new(mp.outputs["Vector"], t.inputs["Vector"])
+            links.new(mp.outputs["Vector"], nt.inputs["Vector"])
+            picked[dname] = (t, nt)
+        col, nrm = nodes.new("ShaderNodeMix"), nodes.new("ShaderNodeMix")
+        for m in (col, nrm):
+            m.data_type = "RGBA"
+            links.new(sep.outputs["Green"], m.inputs["Factor"])
+        links.new(picked["grass_detail"][0].outputs["Color"], col.inputs[6])
+        links.new(picked["soil_detail"][0].outputs["Color"], col.inputs[7])
+        links.new(picked["grass_detail"][1].outputs["Color"], nrm.inputs[6])
+        links.new(picked["soil_detail"][1].outputs["Color"], nrm.inputs[7])
+        mul = nodes.new("ShaderNodeMix")
+        mul.data_type, mul.blend_type = "RGBA", "MULTIPLY"
+        mul.inputs["Factor"].default_value = 1.0
+        links.new(photo.outputs["Color"], mul.inputs[6])
+        links.new(col.outputs[2], mul.inputs[7])
+        gain = nodes.new("ShaderNodeVectorMath")  # back to the photo's brightness (magicMult in AC)
+        gain.operation = "SCALE"
+        lin = ((textures.DETAIL_MEAN + 0.055) / 1.055) ** 2.4  # the detail's average, linear
+        gain.inputs["Scale"].default_value = float(1 / lin)
+        links.new(mul.outputs[2], gain.inputs[0])
+        links.new(gain.outputs["Vector"], bsdf.inputs["Base Color"])
+        nmap = nodes.new("ShaderNodeNormalMap")
+        nmap.inputs["Strength"].default_value = 0.6
+        links.new(nrm.outputs[2], nmap.inputs["Color"])
+        links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
+        nodes.active = photo  # Workbench (menu preview) draws the active image: the photo
+
+
 def material(name):
     if name not in materials:
         normal = None
@@ -54,6 +153,7 @@ def material(name):
             img.filepath_raw = os.path.join(texdir, name + ".png")
             img.file_format = "PNG"
             img.save()
+            photo_mask(name, img)
         elif name in textures.SURFACES:  # procedural texture + normal map (shader ksPerPixelNM in ksEditor)
             make, strength = textures.SURFACES[name]
             albedo, height = make()
@@ -77,6 +177,11 @@ def material(name):
             mat.use_nodes = True
         nodes, links = mat.node_tree.nodes, mat.node_tree.links
         bsdf = next(n for n in nodes if n.type == "BSDF_PRINCIPLED")
+        if name in MATTE:  # grass and soil don't shine: no grey-white sheen at grazing angles
+            bsdf.inputs["Roughness"].default_value = 1.0
+            for spec in ("Specular IOR Level", "Specular"):  # Blender 4+ / 3.x
+                if spec in bsdf.inputs:
+                    bsdf.inputs[spec].default_value = 0.0
         tex = nodes.new("ShaderNodeTexImage")
         tex.image = img
         links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
@@ -135,7 +240,9 @@ if road:
                 r3d.view_perspective = "PERSP"
                 r3d.view_location, r3d.view_distance = centre, span
                 r3d.view_rotation = Euler((0.75, 0.0, 0.35)).to_quaternion()
-bpy.ops.wm.save_as_mainfile(filepath=os.path.splitext(os.path.abspath(out))[0] + ".blend")
+details = detail_textures() if any(m in materials for m in PHOTOS) else {}
+if details:
+    photo_settings(details)
 bpy.ops.export_scene.fbx(
     filepath=os.path.abspath(out),
     object_types={"MESH", "EMPTY"},
@@ -147,6 +254,9 @@ bpy.ops.export_scene.fbx(
     embed_textures=False,
 )
 print(f"exported {len(data['objects'])} meshes, {len(data['empties'])} empties -> {out}")
+if details:  # the .blend (and the menu preview) show the photo with its detail, as ksMultilayer should in AC
+    preview_details(details)
+bpy.ops.wm.save_as_mainfile(filepath=os.path.splitext(os.path.abspath(out))[0] + ".blend")
 
 preview = sys.argv[sys.argv.index("--") + 1:][2:3]
 if preview:  # ui/preview.png for the AC menu: textured aerial view, camera fitted to the asphalt
