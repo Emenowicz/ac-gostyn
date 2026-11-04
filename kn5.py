@@ -81,7 +81,7 @@ def mesh_buffers(o):
     index, verts = {}, []
     for k in normals:
         vi = k if smooth else k[0]
-        n = _norm(normals[k])
+        n = (0.0, 1.0, 0.0) if o.get("normal_up") else _norm(normals[k])  # foliage sprites: lit like the ground
         t = _cross(bitans[k], n)
         t = _norm(_sub(t, tuple(n[i] * _dot(n, t) for i in range(3))),
                   _norm(_cross(n, (0.0, 0.0, 1.0)), (1.0, 0.0, 0.0)))

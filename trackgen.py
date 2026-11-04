@@ -416,13 +416,15 @@ def _plate(poly, z_at, cell=1.0):
 
 TYRE_R = 0.3  # tyre barriers: car tyres lying flat, 0.6 m across (= wall_thickness_m), ~0.2 m each
 TYRE_BLOCK = 3  # stacks per colour block (red / yellow alternate, as painted)
+TYRE_MATERIALS = ("tyre_red", "tyre_yellow", "tyre_black")  # a barrier's "tyres": "black" = all black (unpainted)
 
 
-def _tyre_stacks(points, base_fn, height, seg=8):
-    """Visual tyre stacks along a barrier polyline: one stack every 2 * TYRE_R, round(height / 0.2) tyres high.
+def _tyre_stacks(points, base_fn, height, seg=8, colour=None):
+    """Visual tyre stacks along a barrier polyline: one stack every 2 * TYRE_R, round(height / 0.2) tyres high,
+    in blocks of red and yellow, or all one `colour` (e.g. "black": the plain rows along the embankment).
 
     Each stack is a ring profile (waisted at every joint between tyres, a flat top annulus around the hole) with
-    u around the stack and v up it. Returns {colour: (verts, faces, uvs)}; the collision stays the plain 1WALL box.
+    u around the stack and v up it. Returns {material: (verts, faces, uvs)}; the collision stays the plain 1WALL box.
     """
     n_t = max(1, round(height / 0.2))
     th, top = height / n_t, height + 0.01  # 1 cm above the collision box, so its top doesn't flicker through
@@ -431,7 +433,7 @@ def _tyre_stacks(points, base_fn, height, seg=8):
     prof.append((top, TYRE_R * 0.55))  # inner edge of the top annulus; the dark box shows through as the hole
     total = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
     count = max(1, round(total / (2 * TYRE_R)))
-    out = {"tyre_red": ([], [], []), "tyre_yellow": ([], [], [])}
+    out = {m: ([], [], []) for m in TYRE_MATERIALS}
     seg_i, done = 0, 0.0
     for j in range(count + (0 if points[0] == points[-1] else 1)):
         s = j * total / count if count else 0.0
@@ -442,7 +444,8 @@ def _tyre_stacks(points, base_fn, height, seg=8):
         t = min(1.0, (s - done) / (math.dist(a, b) or 1.0))
         cx, cy = a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])
         z0 = base_fn(cx, cy)
-        verts, faces, uvs = out["tyre_red" if (j // TYRE_BLOCK) % 2 == 0 else "tyre_yellow"]
+        verts, faces, uvs = out[f"tyre_{colour}" if colour else
+                                "tyre_red" if (j // TYRE_BLOCK) % 2 == 0 else "tyre_yellow"]
         base = len(verts)
         for z, r in prof:
             for k in range(seg + 1):  # seg + 1 columns: the texture seam gets its own vertices
@@ -454,6 +457,29 @@ def _tyre_stacks(points, base_fn, height, seg=8):
                 p = base + ring * (seg + 1) + k
                 faces.append([p, p + 1, p + seg + 2, p + seg + 1])  # outward walls, then the top annulus (up)
     return out
+
+
+TREE_VARIANTS = 4  # tree sprites side by side in the tree texture (textures.tree_atlas)
+
+
+def _trees(trees, ground):
+    """Each tree [x, y, crown radius, height]: three vertical planes crossed at 60 deg, 2.4 r wide (the sprite's
+    crown fills ~80 % of it), double-sided (AC draws one side), standing 0.1 m into the ground; a sprite variant and
+    a turn per tree from its position, so neighbours differ."""
+    verts, faces, uvs = [], [], []
+    for x, y, r, h in trees:
+        seed = int(abs(x * 7.3 + y * 13.1) * 10)
+        var, turn = seed % TREE_VARIANTS, (seed % 60) * math.pi / 180
+        z0, half = ground(x, y) - 0.1, 1.2 * r
+        u0, u1 = var / TREE_VARIANTS, (var + 1) / TREE_VARIANTS
+        for k in range(3):
+            a = turn + k * math.pi / 3
+            dx, dy = half * math.cos(a), half * math.sin(a)
+            base = len(verts)
+            verts += [(x - dx, y - dy, z0), (x + dx, y + dy, z0), (x + dx, y + dy, z0 + h), (x - dx, y - dy, z0 + h)]
+            uvs += [(u0, 0.0), (u1, 0.0), (u1, 1.0), (u0, 1.0)]
+            faces += [[base, base + 1, base + 2, base + 3], [base + 3, base + 2, base + 1, base]]
+    return verts, faces, uvs
 
 
 def _ribbon(points, width, zfn):
@@ -560,20 +586,29 @@ def build(cfg, pts, ground=None, features=None, photo=None, photo_near=None):
         kwidth = {side: [klines[j].get("width", kw) if j is not None else kw for j in ids] for side, ids in kerb_id.items()}
         # painted kerbs narrow to a point at both ends; "taper_m": [start, end] per kerb, else kerb_taper_m
         tapers = [k.get("taper_m") for k in klines]
-        kwidth = {side: [w * f for w, f in zip(kwidth[side], _kerb_taper(ids, tapers, ds, cfg.get("kerb_taper_m", 1.5)))]
+        factor = {side: _kerb_taper(ids, tapers, ds, cfg.get("kerb_taper_m", 1.5)) for side, ids in kerb_id.items()}
+        kwidth = {side: [w * f for w, f in zip(kwidth[side], factor[side])] for side in kwidth}
+        # "behind": {"style", "width"}: a second band between the kerb and the grass (a pour behind the stripes),
+        # tapering with the kerb
+        bwidth = {side: [klines[j].get("behind", {}).get("width", 0.0) * f if j is not None else 0.0
+                         for j, f in zip(ids, factor[side])] for side, ids in kerb_id.items()}
+        bstyle = {side: [klines[j].get("behind", {}).get("style") if j is not None else None for j in ids]
                   for side, ids in kerb_id.items()}
     else:  # fallback: inside of corners
         kerb_id = {side: [None] * n for side in (1, -1)}
         kerb = {side: [side * k > cfg["kerb_min_curvature"] for k in curv] for side in (1, -1)}
         kwidth = {side: [kw] * n for side in (1, -1)}
-    kerb_out, wall_off = {}, {}
+        bwidth = {side: [0.0] * n for side in (1, -1)}
+        bstyle = {side: [None] * n for side in (1, -1)}
+    kerb_out, behind_out, wall_off = {}, {}, {}
     for side in (1, -1):
         # kerbs keep their (end-tapered) width along the asphalt edge unless the free space really ends;
         # the raw cap is used because the smoothed one also narrows the kerb before and after a tight apex
         kerb_out[side] = [max(h + 0.1, min(h + w, 0.9 * c)) for h, w, c in zip(half, kwidth[side], raw_caps[side])]
+        behind_out[side] = [max(ko, min(ko + b, 0.9 * c)) for ko, b, c in zip(kerb_out[side], bwidth[side], raw_caps[side])]
         # run-off just stops where space runs out (the terrain covers the rest) instead of pinching into a notch
         wall_off[side] = [ko + 0.1 if 0.85 * c - ko < 0.5 else min(max(h + kw + cfg["runoff_m"], ko + 0.5), 0.85 * c)
-                          for h, ko, c in zip(half, kerb_out[side], caps[side])]
+                          for h, ko, c in zip(half, behind_out[side], caps[side])]
 
     def rows(offs, dz=0.0, u=None, zfn=None):
         """Row of (pos, uv) at lateral offsets `offs`. dz: scalar or per-sample list; u: fixed texture u for the whole
@@ -638,8 +673,16 @@ def build(cfg, pts, ground=None, features=None, photo=None, photo_near=None):
                          [f * GRASS_LIFT_M + ti * (z * peak - f * GRASS_LIFT_M) for ti in t], u=f)
                     for f, z in KERB_PROFILE[s]]
             kerbs[s] += [_strip(a, b, mask, flip) for a, b in zip(prof, prof[1:])]
+        # a band behind the kerb (flat, at grass level) where a kerb has one; the grass starts beyond it
+        kb = rows([side * o for o in behind_out[side]], GRASS_LIFT_M)
+        for s in KERB_STYLES:
+            band = [st == s and bo - o > 0.01 for st, bo, o in zip(bstyle[side], behind_out[side], kerb_out[side])]
+            mask = [band[i] or band[(i + 1) % n] for i in range(n)]  # quad i joins rows i and i + 1
+            if any(mask):
+                kerbs[s].append(_strip(rows([side * o for o in kerb_out[side]], GRASS_LIFT_M, u=0.0),
+                                       rows([side * o for o in behind_out[side]], GRASS_LIFT_M, u=1.0), mask, flip))
         grass.append(_strip(edge, ko, [not m and f for m, f in zip(kerb[side], off_plate(edge, ko))], flip))
-        grass.append(_strip(ko, outer[side], off_plate(ko, outer[side]), flip))
+        grass.append(_strip(kb, outer[side], off_plate(kb, outer[side]), flip))
     objects += [_merge(name, material, kerbs[s]) for s, (name, material, _) in KERB_STYLES.items()]
     objects.append(_merge("1GRASS", "grass", grass))
 
@@ -651,17 +694,22 @@ def build(cfg, pts, ground=None, features=None, photo=None, photo_near=None):
     # collision box around the tyre stacks; "collider" is a fully transparent alpha-test material: AC doesn't draw it
     objects.append(_merge("1WALL", "collider", walls))
     on_kerb = {b["name"] for b in (features or {}).get("barriers", []) if b.get("on_kerb")}
-    stacks = {"tyre_red": [], "tyre_yellow": []}
+    stacks = {m: [] for m in TYRE_MATERIALS}
+    colours = {b["name"]: b.get("tyres") for b in (features or {}).get("barriers", [])}
     for name, line in barriers.items():
         if name.startswith("auto_"):
             continue
         # tyres on a kerb stand on it (track level); the rest on the terrain, sunk 2 cm so they don't float
         base = (lambda x, y: max(ground_z(x, y), z_at(x, y) + GROUND_SINK_M) - 0.02) if name in on_kerb else \
                (lambda x, y: ground_z(x, y) - 0.02)
-        for colour, part in _tyre_stacks(line, base, heights.get(name, cfg["wall_height_m"])).items():
-            stacks[colour].append(part)
+        for colour, part in _tyre_stacks(line, base, heights.get(name, cfg["wall_height_m"]),
+                                         colour=colours.get(name)).items():
+            if part[1]:
+                stacks[colour].append(part)
     for c, parts in stacks.items():  # visual only; flat shaded (crisp edges), so split to stay under the KN5 limit
         objects += _chunks(f"TYRES_{c.split('_')[1].upper()}", c, parts)
+    if (features or {}).get("trees"):  # scenery only: no digit prefix = no physics; lit from above (normal_up)
+        objects.append({**_merge("TREES", "tree", [_trees(features["trees"], ground_z)]), "normal_up": True})
 
     # painted markings (visual only, lifted like the edge lines; the chequered line a little higher where they cross)
     on_road = lambda dz: (lambda x, y: z_at(x, y) + GROUND_SINK_M + dz)
@@ -931,7 +979,8 @@ def validate(cfg, pts, geo):
         if o["name"] == "1ROAD" and len(o["faces"]) != len(sm):  # one quad per sample = no holes
             errors.append(f"1ROAD has {len(o['faces'])} quads for {len(sm)} samples - asphalt has holes")
         wall = o["name"].endswith("WALL")  # vertical sides are fine, upside-down not
-        round_ = o["name"].startswith("TYRES_")  # tyre bulges face down below their widest point: only degenerate counts
+        # tyre bulges face down below their widest point, tree planes are vertical and double-sided: only degenerate counts
+        round_ = o["name"].startswith("TYRES_") or o["name"] == "TREES"
         for f in o["faces"]:
             nx, ny, nz = _normal(o["verts"], f)
             area = math.sqrt(nx * nx + ny * ny + nz * nz)

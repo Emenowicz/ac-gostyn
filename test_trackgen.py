@@ -241,6 +241,15 @@ try:
 except AssertionError as e:
     assert "has no" in str(e), e
 
+# trees: three crossed vertical planes each, double-sided, standing on the ground; the sprite atlas has alpha
+tv, tf, tu = trackgen._trees([[0.0, 0.0, 2.0, 8.0], [10.0, 5.0, 3.0, 12.0]], lambda x, y: 1.0)
+assert len(tf) == 2 * 3 * 2 and len(tv) == 2 * 3 * 4, (len(tf), len(tv))
+assert min(v[2] for v in tv) == 0.9 and max(v[2] for v in tv[:12]) == 8.9, "0.1 m into the ground, h tall"
+assert all(abs(trackgen._normal(tv, f)[2]) < 1e-9 for f in tf), "vertical planes"
+atlas = textures.tree_atlas(w=64, h=128)
+assert atlas.shape == (128, 64 * trackgen.TREE_VARIANTS, 4) and set(np.unique(atlas[..., 3])) <= {0.0, 1.0}
+assert 0.15 < atlas[..., 3].mean() < 0.6, atlas[..., 3].mean()
+
 # KN5 writer: a one-quad track + a start dummy round-trips through the layout ksEditor writes; AC axes (x, z, -y),
 # uv (u, -v), winding kept (face normal along the vertex normal), tangent orthogonal to the normal
 import struct  # noqa: E402

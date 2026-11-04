@@ -45,16 +45,17 @@ EARTH_R = 6371008.8
 # (B ends on A[1]). The two short raceway ways nearby (558923497, 558923506) look like shortcuts - not used.
 OSM_WAYS = (378990687, 558923489)
 
-SURFACES = [  # ponytail: PLACEHOLDER physics, tune after the first drive
+SURFACES = [  # values as on Kunos' magione (its TARMAC, KERB, CONCRETE, PEN-GRS); tune further after test drives
     dict(KEY="ROAD", FRICTION=0.99, DAMPING=0, DIRT_ADDITIVE=0, IS_VALID_TRACK=1, SIN_HEIGHT=0, SIN_LENGTH=0,
          VIBRATION_GAIN=0, VIBRATION_LENGTH=0),
-    dict(KEY="KERB", FRICTION=0.92, DAMPING=0, DIRT_ADDITIVE=0, IS_VALID_TRACK=1, SIN_HEIGHT=0, SIN_LENGTH=0,
-         VIBRATION_GAIN=1.0, VIBRATION_LENGTH=0.5),
-    # concrete pours (red and grey) beside the asphalt: slightly raised like a kerb, but rumble much less (project author)
-    dict(KEY="APRON", FRICTION=0.95, DAMPING=0, DIRT_ADDITIVE=0, IS_VALID_TRACK=1, SIN_HEIGHT=0, SIN_LENGTH=0,
-         VIBRATION_GAIN=0.3, VIBRATION_LENGTH=0.5),
-    dict(KEY="GRASS", FRICTION=0.6, DAMPING=0.1, DIRT_ADDITIVE=1, IS_VALID_TRACK=0, SIN_HEIGHT=0.03, SIN_LENGTH=0.5,
-         VIBRATION_GAIN=0.5, VIBRATION_LENGTH=0.3),
+    # striped kerbs: the 5 cm hump is in the geometry now, so only a light rumble on top (+ the kerb sound, wheel kick)
+    dict(KEY="KERB", FRICTION=0.92, DAMPING=0, WAV="kerb.wav", WAV_PITCH=1.3, FF_EFFECT=1, DIRT_ADDITIVE=0,
+         IS_VALID_TRACK=1, SIN_HEIGHT=0, SIN_LENGTH=0, VIBRATION_GAIN=0.2, VIBRATION_LENGTH=1.0),
+    # concrete pours (red / blue and grey) beside the asphalt: painted concrete, rumbles much less (project author)
+    dict(KEY="APRON", FRICTION=0.90, DAMPING=0, DIRT_ADDITIVE=0, IS_VALID_TRACK=1, SIN_HEIGHT=0, SIN_LENGTH=0,
+         VIBRATION_GAIN=0.1, VIBRATION_LENGTH=0.5),
+    dict(KEY="GRASS", FRICTION=0.6, DAMPING=0, WAV="grass.wav", DIRT_ADDITIVE=1, IS_VALID_TRACK=0, SIN_HEIGHT=0.03,
+         SIN_LENGTH=0.5, VIBRATION_GAIN=0.2, VIBRATION_LENGTH=0.6),
     dict(KEY="WALL", FRICTION=0.3, DAMPING=0, DIRT_ADDITIVE=0, IS_VALID_TRACK=0, SIN_HEIGHT=0, SIN_LENGTH=0,
          VIBRATION_GAIN=0, VIBRATION_LENGTH=0),
 ]
@@ -451,9 +452,9 @@ def write_mod(cfg, geo):
     with open(os.path.join(track, "models.ini"), "w") as f:
         f.write(f"[MODEL_0]\nFILE={cfg['folder']}.kn5\nPOSITION=0,0,0\nROTATION=0,0,0\n")
     with open(os.path.join(track, "data", "surfaces.ini"), "w") as f:
-        f.write("; PLACEHOLDER physics values - tune after test drives\n")
+        f.write("; values as on Kunos' magione - tune after test drives (lap record 50.4 s, rental karts)\n")
         for i, s in enumerate(SURFACES):
-            s = dict(s, WAV="", WAV_PITCH=0, FF_EFFECT="NULL", BLACK_FLAG_TIME=0, IS_PITLANE=0)
+            s = {"KEY": s["KEY"], **dict(WAV="", WAV_PITCH=0, FF_EFFECT="NULL", BLACK_FLAG_TIME=0, IS_PITLANE=0), **s}
             f.write(f"\n[SURFACE_{i}]\n" + "".join(f"{k}={v}\n" for k, v in s.items()))
     sm = geo["samples"]
     area = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(sm, sm[1:] + sm[:1]))  # >0 = counter-clockwise

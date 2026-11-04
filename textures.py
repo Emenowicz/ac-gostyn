@@ -220,6 +220,59 @@ def asphalt_macro(rgb, ref_px=None, radius_px=4, clip=(0.9, 1.2)):
     return np.clip(np.nan_to_num(ratio / ref, nan=1.0), *clip)
 
 
+TREE_KINDS = [  # (leaf colour, crown centre height, crown half-width, half-height) as fractions of the sprite
+    ((0.20, 0.31, 0.10), 0.62, 0.40, 0.36),  # broadleaf, round
+    ((0.25, 0.34, 0.12), 0.66, 0.36, 0.32),  # lighter, higher crown
+    ((0.17, 0.27, 0.11), 0.58, 0.44, 0.40),  # dark, wide
+    ((0.11, 0.21, 0.12), None, 0.36, None),  # conifer: a cone from 12 % up to the top
+]
+
+
+def tree_atlas(w=256, h=512, seed=120):
+    """Tree sprites side by side (trackgen.TREE_VARIANTS = len(TREE_KINDS)), RGBA, row 0 = bottom, alpha 0 / 1 for
+    the alpha test: a trunk, and a crown made of leaf clusters (random discs inside the crown's outline) with a ragged
+    edge, lit from above and darker inside. Transparent pixels carry the crown colour, so mipmaps don't fringe dark."""
+    rng = np.random.default_rng(seed)
+    out = []
+    for kind, (leaf, cy, rx, ry) in enumerate(TREE_KINDS):
+        y, x = np.mgrid[0:h, 0:w]
+        u, v = (x + 0.5) / w, (y + 0.5) / h * (h / w)  # v in sprite widths, so discs stay round
+        top = h / w
+        if cy is None:  # cone
+            frac = np.clip((v / top - 0.12) / 0.88, 0, 1)
+            outline = (np.abs(u - 0.5) < rx * (1 - frac) + 0.03) & (v / top > 0.12)
+        else:
+            outline = ((u - 0.5) / rx) ** 2 + ((v / top - cy) * top / (ry * top)) ** 2 < 1
+        crown = np.zeros((h, w), bool)
+        shade = np.zeros((h, w))
+        conifer = cy is None
+        # cluster centres well inside the outline (eroded by the cluster size), so the silhouette stays compact
+        count, (rmin, rmax) = (260, (0.03, 0.06)) if conifer else (150, (0.05, 0.09))
+        inner = outline.copy()
+        k = int(rmax * w * 0.7)
+        for di, dj in ((k, 0), (-k, 0), (0, k), (0, -k)):
+            inner &= np.roll(np.roll(outline, di, 0), dj, 1)
+        cand = np.argwhere(inner if inner.any() else outline)
+        edge_noise = noise((h, w), 1.2, seed + kind)
+        for _ in range(count):
+            i, j = cand[rng.integers(len(cand))]
+            r = rng.uniform(rmin, rmax) * w
+            d = np.hypot(x - j, y - i) / r
+            # solid core, leafy (ragged) rim: holes only in the outer 25 % of each cluster
+            disc = (d < 0.75) | ((d < 1) & (edge_noise > (d - 0.75) * 8 - 1.0))
+            crown |= disc
+            shade = np.maximum(shade, np.where(disc, 1 - 0.5 * d + 0.25 * (y - i) / r, 0))  # each cluster lit from above
+        grain = noise((h, w), 1.5, seed + 10 + kind)
+        height_light = 0.70 + 0.35 * np.clip(v / top, 0, 1)
+        col = np.asarray(leaf) * (height_light * (0.75 + 0.35 * np.clip(shade, 0, 1)) * (1 + 0.12 * grain))[..., None]
+        trunk = (np.abs(u - 0.5) < 0.035 - 0.015 * v / top) & (v / top < (0.5 if cy is None else cy))
+        bark = np.asarray((0.30, 0.23, 0.16)) * (0.8 + 0.2 * noise((h, w), 1.0, seed + 20 + kind))[..., None]
+        rgb = np.where(crown[..., None], col, np.where(trunk[..., None], bark, np.asarray(leaf)))
+        alpha = (crown | trunk).astype(float)
+        out.append(np.dstack((np.clip(rgb, 0, 1), alpha)))
+    return np.concatenate(out, axis=1)
+
+
 PHOTO_SATURATION, PHOTO_GAIN = 1.8, 0.92
 
 
@@ -250,4 +303,5 @@ SURFACES = {"road": (asphalt, 6.0), "concrete": (concrete, 4.0), "kerb": (kerb_s
             "paint_mint": (lambda: paint_white(seed=65, colour=(0.66, 0.78, 0.72)), 2.0),  # grid boxes (photo)
             "chequer": (chequer, 2.0),
             "tyre_red": (lambda: tyre((0.62, 0.08, 0.06), seed=70), 3.0),
-            "tyre_yellow": (lambda: tyre((0.88, 0.70, 0.12), seed=80), 3.0)}
+            "tyre_yellow": (lambda: tyre((0.88, 0.70, 0.12), seed=80), 3.0),
+            "tyre_black": (lambda: tyre((0.09, 0.09, 0.09), seed=90), 3.0)}  # unpainted rows (embankment)

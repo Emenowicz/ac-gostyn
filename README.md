@@ -193,8 +193,16 @@ wylewki to równa pochylnia 0 → 4 cm (`KERB_PROFILE`). Gdzie tarki nie ma, tra
 asfaltu, a na końcach tarki garb płynnie przechodzi w tę pochylnię. Wylewki mają własną nawierzchnię `APRON` ze
 słabszą wibracją niż `KERB`.
 Tarka zwęża się do szpica na końcach na długości `"taper_m": [początek, koniec]` (w metrach, w kierunku jazdy;
-domyślnie `kerb_taper_m` z `track.json`), bez zwężenia tam, gdzie styka się z inną tarką.
-Banda z `"on_kerb": true` może stać na tarce, a `"height"` nadpisuje jej wysokość (np. 0,25 m dla pojedynczej opony leżącej przy wierzchołku).
+domyślnie `kerb_taper_m` z `track.json`), bez zwężenia tam, gdzie styka się z inną tarką. `"behind": {"style", "width"}`
+dodaje drugi pas między tarką a trawą, płasko na poziomie trawy i zwężający się razem z tarką (przy `s2_apex`
+czerwono-niebieski beton za paskami).
+Banda z `"on_kerb": true` może stać na tarce, a `"height"` nadpisuje jej wysokość (np. 0,25 m dla pojedynczej opony
+leżącej przy wierzchołku). `"tyres": "black"` – banda z samych czarnych, niemalowanych opon (`TYRES_BLACK`: rząd
+wzdłuż skarpy na południu, skrót zachodni, przegroda w nawrocie C), inaczej bloki czerwone / żółte.
+`"trees"`: `[x, y, promień korony, wysokość]` – drzewa 3D (`TREES`, bez fizyki): po trzy skrzyżowane pionowe płaszczyzny
+z teksturą z przezroczystością (`ksPerPixelAT`, atlas czterech wariantów z `textures.tree_atlas`), oświetlone jak
+grunt. Korony z liśćmi wykryte na zdjęciu po kolorze i fakturze, drzewa bez liści na zdjęciu z kwietnia (szpaler przy
+drodze na wschodzie, skarpa na południu) i iglaki przy zachodnim parkingu rozstawione ręcznie – do poprawiania w pliku.
 Płyta z `extra_asphalt` może być dowolnym wielokątem bez samoprzecięć. Pola startowe `AC_START_*` stoją na punktach z `grid`
 (kolejno od linii mety); gdy `grid_slots` w `track.json` jest większe, kolejne pola przedłużają obie kolumny o zmierzony
 rozstaw rzędów. Bandy rysowane są jako słupki opon (`TYRES_*`, co 0,6 m, opony po ok. 0,2 m), a zderzenia liczy
