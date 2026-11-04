@@ -77,49 +77,59 @@ build/ortho_overlay.svg                   model na ortofotomapie – otwórz w p
 
 ## 4. Konwersja w ksEditor (tylko Windows)
 
-1. Skopiuj na PC z Windowsem cały folder `build/fbx/` (FBX razem z `texture/`) oraz `build/content/`.
-2. Uruchom `ksEditor.exe` i zaimportuj `kartodrom_gostyn.fbx` (menu File).
-3. Ustaw shader i tekstury każdego materiału (pliki z `texture/`). Materiały z mapą normalnych (`*_nm.png`,
-   generowaną razem z teksturą) dostają `ksPerPixelNM` z `txDiffuse` = `<nazwa>.png` i `txNormal` = `<nazwa>_nm.png`:
+1. Skopiuj na PC z Windowsem cały folder `build/fbx/` (FBX razem z `texture/` i `kartodrom_gostyn.fbx.ini`) oraz
+   `build/content/`. ksEditor jest w grze: `assettocorsa\sdk\editor\ksEditor.exe` (uruchamiaj z tego folderu).
+2. File → Import → `kartodrom_gostyn.fbx`.
+3. W zakładce Scene zaznacz węzeł **MODEL: kartodrom_gostyn.fbx**, potem File → **Load Persistence** →
+   `kartodrom_gostyn.fbx.ini`. Ten plik (format „Save Persistence” ksEditora, generuje go `persistence.py`) ustawia
+   wszystkie materiały naraz – shadery, wartości i tekstury – oraz flagi obiektów (bez cieni dla płaskich powierzchni).
+   Ręcznie nie trzeba niczego klikać; dla porządku, co w nim jest:
 
    | Materiał | Shader | Tekstury | Gdzie |
    |---|---|---|---|
-   | `road` | `ksMultilayer_fresnel_nm4` | `road_macro`, `mask_r`, detal `road`, `road_nm` – niżej | asfalt, płyty dodatkowego asfaltu |
+   | `road` | `ksMultilayer_fresnel_nm` | `road_macro`, `mask_r`, detal `road`, `road_nm` – niżej | asfalt, płyty dodatkowego asfaltu |
    | `kerb` | `ksPerPixelNM` | `kerb`, `kerb_nm` | tarki (paski czerwono-żółte) |
    | `kerb_apron` | `ksPerPixelNM` | `kerb_apron`, `kerb_apron_nm` | wylewki z czerwonego betonu (`1APRON`) |
    | `kerb_concrete` | `ksPerPixelNM` | `kerb_concrete`, `kerb_concrete_nm` | szare betonowe wylewki (`2APRON`) |
    | `concrete` | `ksPerPixelNM` | `concrete`, `concrete_nm` | mur na brzegu terenu (`2WALL`) |
-   | `tyre_red`, `tyre_yellow` | `ksPerPixelNM` | `tyre_red`, `tyre_red_nm` itd. | opony band (`TYRES_RED/YELLOW`, bez fizyki) |
+   | `tyre_red`, `tyre_yellow` | `ksPerPixelNM` | `tyre_red`, `tyre_red_nm` itd. | opony band (`TYRES_RED*/YELLOW*`, bez fizyki) |
    | `paint_white` | `ksPerPixelNM` | `paint_white`, `paint_white_nm` | linie krawędzi i korytarzy (`LINES_WHITE`, `LINES_LANES`) |
    | `paint_mint` | `ksPerPixelNM` | `paint_mint`, `paint_mint_nm` | pola startowe (`LINES_GRID`) |
    | `chequer` | `ksPerPixelNM` | `chequer`, `chequer_nm` | linia startu i mety (`LINES_START`) |
-   | `ortho_near` | `ksMultilayer_fresnel_nm4` | `ortho_near`, `ortho_near_mask`, detale – niżej | pobocze i teren w okolicy toru (ortofotomapa 5 cm, `1GRASS`, `2GRASS`) |
-   | `ortho` | `ksMultilayer_fresnel_nm4` | `ortho`, `ortho_mask`, detale – niżej | dalszy teren (`3GRASS`) |
+   | `ortho_near` | `ksMultilayer_fresnel_nm` | `ortho_near`, `ortho_near_mask`, detale – niżej | pobocze i teren w okolicy toru (ortofotomapa 5 cm, `1GRASS`, `2GRASS`) |
+   | `ortho` | `ksMultilayer_fresnel_nm` | `ortho`, `ortho_mask`, detale – niżej | dalszy teren (`3GRASS`) |
    | `collider` | `ksPerPixelAT` | `collider` (w pełni przezroczysta) | kolizja band `1WALL`: niewidoczna, tylko fizyka |
+
+   **Jak liczy `ksMultilayer_fresnel_nm`** (z CSP jest to jego odtworzony shader, `recreated/ksMultilayer_fresnel_nm_ps.fx`
+   w repozytorium acc-shaders): `txDiffuse` × (detale R…A ważone kanałami `txMask`) × `magicMult`. Detale próbkuje
+   po **pozycji w świecie** × `multR…multA`, czyli to liczba powtórzeń na metr (kafel 1,5 m → 0,667), a jedną mapę
+   normalnych detalu `txDetailNM` po UV siatki × `detailNMMult`. `ksAlphaRef` = −193 włącza w CSP losową wariację
+   kafli detalu (mniej widać powtórzenia); `ksSpecular` ten shader pomija, połysk daje tylko fresnel.
+   Oświetlenie (`ksAmbient` / `ksDiffuse` 0,4 / 0,4 dla asfaltu i trawy, 0,35 / 0,35 dla reszty) i wypadkowa
+   jasność powierzchni (diffuse × detal × `magicMult`: trawa ok. 0,3, asfalt ok. 0,31) są jak na torach Kunos
+   (Magione, Drift); domyślne ksEditora (0 / 0,8) dają czarny cień i prześwietlone słońce.
 
    **Ortofotomapy z detalem.** Z bliska piksel 5 cm jest rozmyty, więc na zdjęcie nakłada się powtarzalny detal:
    trawa (`grass_detail`, kafel 1,5 m) albo goła ziemia – wytarte pobocza, piach, żwir (`soil_detail`, kafel 2 m).
    Który detal gdzie, mówi maska `<zdjęcie>_mask.png` liczona ze zdjęcia: R = trawa, G = bez trawy, B = A = 0.
-   Kolor zostaje ze zdjęcia, detal (szarawy mnożnik o średniej 0,8) dodaje źdźbła, grudy i kamyki. Komplet ustawień
-   z mnożnikami UV wyliczonymi z zasięgu zdjęcia zapisuje build do `build/fbx/ksEditor_multilayer.txt`:
-   `txDiffuse` = zdjęcie, `txMask` = maska, `txDetailR` = `grass_detail`, `txDetailG` = `soil_detail`,
-   `txNormalR/G` = ich `_nm`, `multR/multG` z pliku, `magicMult` = 1,25. Trawa i ziemia są matowe:
-   `ksSpecular` = 0 i fresnel 0, inaczej pod niskim kątem pobocze robi się szarobiałe. **Nie sprawdzone jeszcze w AC**:
-   gdyby pobocze wyszło ciemniejsze lub jaśniejsze niż zdjęcie, popraw `magicMult`; bez map normalnych wystarczy
-   `ksMultilayer`. Podgląd w `.blend` pokazuje zdjęcie już z detalem (FBX niesie samo zdjęcie).
+   Kolor zostaje ze zdjęcia, detal (szarawy mnożnik o średniej 0,8, stąd `magicMult` = 1,25) dodaje źdźbła, grudy
+   i kamyki. Zdjęcie lotnicze przez zamglenie ma bladą, niebieskawą trawę – w ostrym słońcu gry wyglądała jak
+   prześwietlona – więc build podbija mu nasycenie (×1,8) i lekko przyciemnia (×0,92, `textures.grade_photo`).
+   Trawa i ziemia są matowe (fresnel 0). Podgląd w `.blend` pokazuje zdjęcie już z detalem (FBX niesie samo zdjęcie).
 
    **Asfalt** działa tak samo: bazą jest `road_macro` – jasność asfaltu ze zdjęcia 5 cm (zjeżdżona linia jazdy,
    jaśniejsze i ciemniejsze odcinki; bez białych linii, opon i trawy, przycięte do −10…+20 %, bo głębsze ciemne plamy
    to cień drzew, który AC rysuje sam), detalem kafel `road` 8 × 8 m (2048 px, bez wyróżniających się plam, żeby
-   nie było widać powtórzeń). Maska `mask_r` = sam kanał R, `magicMult` = 2 (baza jest szara, 0,5 = mediana asfaltu
-   toru). Ustawienia w tym samym pliku, sekcja `[road]`. Bez zdjęcia (`build.py` bez ortofotomapy) asfalt ma zwykłe
+   nie było widać powtórzeń). Maska `mask_r` = sam kanał R, `magicMult` = 1,5 (baza jest szara, 0,5 = mediana asfaltu
+   toru). Połysk pod niskim kątem jest słabszy niż u Kunos (`fresnelMaxLevel` 0,5 zamiast 1,8): ich asfalt ma maskę
+   odbić w kanale alfa tekstury, nasz `road_macro` nie. Bez zdjęcia (`build.py` bez ortofotomapy) asfalt ma zwykłe
    UV kafla i wystarczy `ksPerPixelNM` z `road` / `road_nm`.
 
    Mapy normalnych są w konwencji OpenGL (zielony = +v). Gdyby faktura wyglądała jak wklęsła zamiast wypukłej,
    odwróć kanał zielony (albo ustaw mnożnik normalnych na ujemny).
 
-4. Zapisz jako tor: File → Save kn5 → Track, pod nazwą `kartodrom_gostyn.kn5`, do folderu
-   `content\tracks\kartodrom_gostyn\` (tego z `build/content/`).
+4. Zapisz jako tor: File → Save as KN5, pod nazwą `kartodrom_gostyn.kn5`, do folderu
+   `content	racks\kartodrom_gostyn\` (tego z `build/content/`, albo od razu do gry).
 
 Nazwy menu mogą się nieco różnić między wersjami ksEditor.
 
@@ -161,8 +171,12 @@ w modelu. Po zmianie uruchom `python3 build.py validate` i obejrzyj `build/ortho
 Współrzędne są w metrach względem punktu `origin_lat_lon` z `track.json`. Tarka powstaje tam, gdzie krawędź asfaltu
 leży bliżej niż `kerb_snap_m` od linii z `kerbs`; jej szerokość to `width` tej tarki (zmierzona przez `fit-kerbs`). Tarka zaczyna się
 na krawędzi asfaltu, a krawędź asfaltu to malowana biała linia. `"style"` tarki: `stripes` (domyślnie, paski czerwono-żółte),
-`apron` (wylewka z czerwonego betonu z jasnym brzegiem), `concrete` (szara betonowa wylewka). Obie wylewki są
-podniesione o 3 cm jak tarka i mają własną nawierzchnię `APRON` ze słabszą wibracją niż `KERB`.
+`apron` (wylewka z czerwonego betonu z jasnym brzegiem), `concrete` (szara betonowa wylewka). Trawa przy torze leży
+trochę wyżej niż asfalt (`GRASS_LIFT_M` = 4 cm w `trackgen.py`), a tarki i wylewki są przejściem z jednego na drugie:
+tarka w paski wznosi się od asfaltu, ma garb 5 cm przy trawie (tam ciągły czerwony brzeg) i schodzi na poziom trawy,
+wylewki to równa pochylnia 0 → 4 cm (`KERB_PROFILE`). Gdzie tarki nie ma, trawa wznosi się tak samo od krawędzi
+asfaltu, a na końcach tarki garb płynnie przechodzi w tę pochylnię. Wylewki mają własną nawierzchnię `APRON` ze
+słabszą wibracją niż `KERB`.
 Tarka zwęża się do szpica na końcach na długości `"taper_m": [początek, koniec]` (w metrach, w kierunku jazdy;
 domyślnie `kerb_taper_m` z `track.json`), bez zwężenia tam, gdzie styka się z inną tarką.
 Banda z `"on_kerb": true` może stać na tarce, a `"height"` nadpisuje jej wysokość (np. 0,25 m dla pojedynczej opony leżącej przy wierzchołku).
@@ -207,7 +221,7 @@ data/*.csv, *.json ──> trackgen.py ──> build/mesh.json ──> blender_b
   numpy z Blendera, więc dalej bez `pip install`.
 
 Obiekty w AC (pierwsza cyfra + nazwa nawierzchni = fizyka): `1ROAD`, `2ROAD` (płyty),
-`1APRON` i `2APRON` (czerwone i szare wylewki), `1KERB` (tarki w paski), `1GRASS`, `2GRASS`, `3GRASS` (teren), `1WALL` (kolizja band, niewidoczna), `2WALL` (mur). Bez fizyki: `TYRES_RED`, `TYRES_YELLOW` (opony),
+`1APRON` i `2APRON` (czerwone i szare wylewki), `1KERB` (tarki w paski), `1GRASS`, `2GRASS`, `3GRASS` (teren), `1WALL` (kolizja band, niewidoczna), `2WALL` (mur). Bez fizyki: `TYRES_RED`, `TYRES_YELLOW` (opony; przy ponad 60 000 wierzchołków dzielone na `_2`, `_3`…),
 `LINES_WHITE`, `LINES_LANES`, `LINES_GRID`, `LINES_START` (malowanie). Punkty: `AC_START_0..9`, `AC_PIT_0..9`, `AC_TIME_0_L/R`, `AC_HOTLAP_START_0`.
 
 ## 8. Do zrobienia

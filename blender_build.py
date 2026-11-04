@@ -22,13 +22,14 @@ MATTE = set(PHOTOS) | {"grass", "ground"}
 # asphalt on the sharp photo's UVs (trackgen drapes 1ROAD / 2ROAD when there is one): base = the photo's asphalt
 # brightness map (road_macro), detail = the 8 m asphalt tile
 ROAD_MACRO = bool(data.get("photo_near"))
-MACRO_GREY = 0.5  # road_macro stores 0.5 x the brightness ratio -> magicMult 2
+MACRO_GREY = 0.5  # road_macro stores 0.5 x the brightness ratio
+ROAD_GAIN = 0.75  # magicMult = ROAD_GAIN / MACRO_GREY: macro x road.png (0.41) x 1.5 = 0.31, as on the Kunos tracks
 RED, YELLOW = (0.72, 0.07, 0.06), (0.93, 0.72, 0.08)
 STRIPES = {}  # stripes per tile, axis (0 = u / image x, 1 = v / image y)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import textures  # noqa: E402  (numpy, bundled with Blender)
-from trackgen import ROAD_UV_M  # noqa: E402
+from trackgen import ROAD_UV_M, SMOOTH_MATERIALS  # noqa: E402
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
@@ -57,10 +58,18 @@ _photos = {}
 
 
 def load_photo(key):
-    """The GUGiK photo data[key] ("photo" / "photo_near") as a 4096^2 image; loaded once (the road map reuses it)."""
+    """The GUGiK photo data[key] ("photo" / "photo_near") as a 4096^2 image, graded (textures.grade_photo: the aerial
+    haze washes the grass out); loaded once (the road map reuses it)."""
     if key not in _photos:
+        import numpy as np
         img = bpy.data.images.load(data[key])
         img.scale(4096, 4096)
+        w, h = img.size
+        px = np.empty(w * h * 4, np.float32)
+        img.pixels.foreach_get(px)
+        px = px.reshape(h, w, 4)
+        px[..., :3] = textures.grade_photo(px[..., :3])
+        img.pixels.foreach_set(px.ravel())
         _photos[key] = img
     return _photos[key]
 
@@ -105,37 +114,70 @@ def detail_textures():
     return out
 
 
-def photo_settings(details):
-    """build/fbx/ksEditor_multilayer.txt: shader settings for the photo and asphalt materials (the UV multipliers depend on the
-    photo's extent, so they are computed here instead of written into the README)."""
-    lines = []
-    for name, key in (("ortho", "photo"), ("ortho_near", "photo_near")):
-        if not data.get(key):
-            continue
+# specular (ksSpecular, ksSpecularEXP) per material for ksEditor; the rest stays matte (grass, soil, photo terrain)
+SHINE = {"kerb": (0.25, 30), "kerb_apron": (0.15, 20), "kerb_concrete": (0.1, 15),
+         "concrete": (0.05, 10), "paint_white": (0.25, 30), "paint_mint": (0.25, 30), "chequer": (0.25, 30),
+         "tyre_red": (0.15, 15), "tyre_yellow": (0.15, 15)}
+FLAT_GROUND = ("ROAD", "GRASS", "LINES_", "KERB", "APRON")  # objects lying on the ground: no shadow casting
+
+
+def ks_persistence(details):
+    """build/fbx/<model>.fbx.ini: every material's ksEditor shader, values and textures (File -> Load Persistence).
+    The photo materials and the asphalt use ksMultilayer_fresnel_nm (CSP's recreated shader, acc-shaders
+    recreated/ksMultilayer_fresnel_nm_ps.fx): txDiffuse x (detail R..A weighted by txMask) x magicMult, the details
+    sampled at world position x multR..multA (repeats per metre), the one detail normal map at mesh UV x
+    detailNMMult; ksAlphaRef -193 turns on CSP's tile variation of the details. Lighting as on the Kunos tracks
+    (magione, drift: asphalt and grass 0.4 / 0.4), and so is diffuse x detail x magicMult: grass ~0.3, asphalt ~0.31."""
+    import datetime
+    import persistence
+
+    def uv_per_m(key):  # UV units per metre on the photo (the 4096^2 photo is ~10 % anisotropic)
         with open(os.path.splitext(data[key])[0] + ".json") as f:
             uv = json.load(f)["uv"]
-        per_m = (abs(uv[0][0]) + abs(uv[1][1])) / 2  # UV units per metre (the 4096^2 photo is ~10 % anisotropic)
-        mult = {d: round(1 / (per_m * tile), 1) for d, (_, _, tile) in details.items()}
-        lines += [f"[{name}]  shader ksMultilayer_fresnel_nm4 (or ksMultilayer without the normals)",
-                  f"  txDiffuse = {name}.png   txMask = {name}_mask.png  (R = grass, G = bare soil, B = A = 0)",
-                  "  txDetailR = grass_detail.png   txDetailG = soil_detail.png   txDetailB = txDetailA = grass_detail.png",
-                  "  txNormalR = grass_detail_nm.png   txNormalG = soil_detail_nm.png   (nm4 only)",
-                  f"  multR = {mult['grass_detail']}   multG = {mult['soil_detail']}   multB = multA = {mult['grass_detail']}",
-                  f"  magicMult = {round(1 / textures.DETAIL_MEAN, 2)}  (detail textures average {textures.DETAIL_MEAN};"
-                  " darker / lighter than the photo in AC -> change this)",
-                  "  ksSpecular = 0, fresnelC = 0, fresnelMaxLevel = 0  (matte: no sheen at grazing angles)", ""]
-    if ROAD_MACRO and "road" in materials:
-        with open(os.path.splitext(data["photo_near"])[0] + ".json") as f:
-            uv = json.load(f)["uv"]
-        per_m = (abs(uv[0][0]) + abs(uv[1][1])) / 2
-        lines += ["[road]  shader ksMultilayer_fresnel_nm4 (or ksMultilayer without the normals)",
-                  "  txDiffuse = road_macro.png  (the photo's asphalt brightness, grey)   txMask = mask_r.png",
-                  "  txDetailR = txDetailG = txDetailB = txDetailA = road.png   txNormalR = road_nm.png   (nm4 only)",
-                  f"  multR = multG = multB = multA = {round(1 / (per_m * ROAD_UV_M), 1)}",
-                  f"  magicMult = {round(1 / MACRO_GREY, 2)}  (road_macro is {MACRO_GREY} x the brightness ratio;"
-                  " darker / lighter asphalt than road.png in AC -> change this)", ""]
-    with open(os.path.join(os.path.dirname(os.path.abspath(out)), "ksEditor_multilayer.txt"), "w") as f:
-        f.write("\n".join(lines))
+        return (abs(uv[0][0]) + abs(uv[1][1])) / 2
+
+    multilayer = {"ksAmbient": 0.4, "ksDiffuse": 0.4, "ksAlphaRef": -193}
+    mats = {}
+    for name in sorted(materials):
+        spec, exp = SHINE.get(name, (0.0, 10))
+        vals = {"ksSpecular": spec, "ksSpecularEXP": exp}
+        if name in PHOTOS and details:
+            per_m = uv_per_m("photo" if name == "ortho" else "photo_near")
+            grass, soil = (round(1 / details[d][2], 3) for d in ("grass_detail", "soil_detail"))
+            mats[name] = ("ksMultilayer_fresnel_nm",
+                          {**vals, **multilayer, "multR": grass, "multG": soil, "multB": grass, "multA": grass,
+                           "magicMult": round(1 / textures.DETAIL_MEAN, 2),
+                           "detailNMMult": round(1 / (per_m * details["grass_detail"][2]), 1)},
+                          {"txDiffuse": f"{name}.png", "txMask": f"{name}_mask.png", "txDetailR": "grass_detail.png",
+                           "txDetailG": "soil_detail.png", "txDetailB": "grass_detail.png",
+                           "txDetailA": "grass_detail.png", "txDetailNM": "grass_detail_nm.png"})
+        elif name == "road" and ROAD_MACRO:
+            tile = round(1 / ROAD_UV_M, 3)
+            mats[name] = ("ksMultilayer_fresnel_nm",
+                          {**vals, **multilayer, "ksSpecularEXP": 8,
+                           "multR": tile, "multG": tile, "multB": tile, "multA": tile,
+                           "magicMult": round(ROAD_GAIN / MACRO_GREY, 2),
+                           "detailNMMult": round(1 / (uv_per_m("photo_near") * ROAD_UV_M), 1),
+                           # sheen at grazing angles, much weaker than Kunos' 2 / 1.8: those have a reflection mask
+                           # in the diffuse alpha, road_macro's alpha is 1 everywhere
+                           "tarmacSpecularMultiplier": 1, "fresnelC": 0.0, "fresnelEXP": 4, "fresnelMaxLevel": 0.5},
+                          {"txDiffuse": "road_macro.png", "txMask": "mask_r.png", "txDetailR": "road.png",
+                           "txDetailG": "road.png", "txDetailB": "road.png", "txDetailA": "road.png",
+                           "txDetailNM": "road_nm.png"})
+        elif name in INVISIBLE:  # collision only: alpha 0 everywhere, cut away by the alpha test
+            mats[name] = ("ksPerPixelAT", {**vals, "ksAlphaRef": 0.5}, {"txDiffuse": f"{name}.png"})
+        elif os.path.exists(os.path.join(texdir, name + "_nm.png")):
+            mats[name] = ("ksPerPixelNM", vals, {"txDiffuse": f"{name}.png", "txNormal": f"{name}_nm.png"})
+        else:
+            mats[name] = ("ksPerPixel", vals, {"txDiffuse": f"{name}.png"})
+    meshes = [o["name"] for o in data["objects"]]
+    text = persistence.fbx_ini(
+        os.path.basename(out), mats, meshes, [e["name"] for e in data["empties"]],
+        date=datetime.datetime.now().strftime("%m/%d/%Y %I:%M:%S %p"),
+        no_shadow=[m for m in meshes if any(k in m for k in FLAT_GROUND) or m == "1WALL"])
+    with open(os.path.abspath(out) + ".ini", "w", newline="") as f:
+        f.write(text)
+    print(f"ksEditor persistence -> {out}.ini ({len(mats)} materials)")
 
 
 def preview_details(details):
@@ -213,7 +255,7 @@ def preview_road():
     links.new(t.outputs["Color"], mul.inputs[7])
     gain = nodes.new("ShaderNodeVectorMath")
     gain.operation = "SCALE"
-    gain.inputs["Scale"].default_value = float(1 / (((MACRO_GREY + 0.055) / 1.055) ** 2.4))  # linear grey -> 1
+    gain.inputs["Scale"].default_value = float((ROAD_GAIN / MACRO_GREY) ** 2.2)  # magicMult, in linear
     links.new(mul.outputs[2], gain.inputs[0])
     links.new(gain.outputs["Vector"], bsdf.inputs["Base Color"])
     nmap = nodes.new("ShaderNodeNormalMap")
@@ -286,7 +328,7 @@ for o in data["objects"]:
     loop_verts = [0] * len(me.loops)
     me.loops.foreach_get("vertex_index", loop_verts)
     uv.data.foreach_set("uv", [c for vi in loop_verts for c in o["uvs"][vi]])
-    if o["material"] == "ground":
+    if o["material"] in SMOOTH_MATERIALS:  # one normal per vertex: ksEditor doesn't split it (vertex limit)
         me.polygons.foreach_set("use_smooth", [True] * len(me.polygons))
     if me.validate():
         print(f"WARNING: Blender fixed invalid geometry in {o['name']}")
@@ -320,8 +362,7 @@ if road:
                 r3d.view_location, r3d.view_distance = centre, span
                 r3d.view_rotation = Euler((0.75, 0.0, 0.35)).to_quaternion()
 details = detail_textures() if any(m in materials for m in PHOTOS) else {}
-if details:
-    photo_settings(details)
+ks_persistence(details)
 bpy.ops.export_scene.fbx(
     filepath=os.path.abspath(out),
     object_types={"MESH", "EMPTY"},

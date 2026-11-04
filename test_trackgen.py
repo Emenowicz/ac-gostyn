@@ -30,7 +30,11 @@ feats = {"start_finish": [[R - 5, 0.0], [R + 5, 0.0]],
 g2 = trackgen.build(cfg, pts, None, feats)
 assert not trackgen.validate(cfg, pts, g2)[0]
 kerb = next(o for o in g2["objects"] if o["name"] == "1KERB")
-assert 0 < len(kerb["faces"]) < 20 and all(v[1] > R - 10 for v in kerb["verts"]), len(kerb["faces"])
+strips = len(trackgen.KERB_PROFILE["stripes"]) - 1  # the humped cross-section
+assert 0 < len(kerb["faces"]) < 20 * strips and all(v[1] > R - 10 for v in kerb["verts"]), len(kerb["faces"])
+lift = trackgen.KERB_STYLES["stripes"][2]
+top = max(v[2] for v in kerb["verts"]) - min(v[2] for v in kerb["verts"])
+assert lift * 0.9 < top < lift + 0.05, ("striped kerb peaks ~lift above the asphalt", top)
 gates = {e["name"]: e["pos"] for e in g2["empties"] if e["name"].startswith("AC_TIME")}
 assert abs(gates["AC_TIME_0_L"][0] - (R - 5.5)) < 0.01 and abs(gates["AC_TIME_0_R"][0] - (R + 5.5)) < 0.01, gates
 assert any(o["name"] == "2ROAD" for o in g2["objects"])
@@ -61,10 +65,14 @@ for style, name in (("apron", "1APRON"), ("concrete", "2APRON"), ("stripes", "1K
     assert us[0] == 0.0 and us[-1] == 1.0, us
     road_z = max(v[2] for v in objs["1ROAD"]["verts"])  # flat test track: road at z = 0
     top = max(v[2] for v in objs[name]["verts"]) - road_z
-    if style != "stripes":  # concrete pours: raised 3 cm, ramps at both sides, edges stay at road level
-        assert abs(top - 0.03) < 1e-9 and min(v[2] for v in objs[name]["verts"]) == road_z, top
-    else:
-        assert abs(top) < 1e-9, top
+    # every kerb climbs from the asphalt (u = 0, road level) to the verge grass (u = 1, GRASS_LIFT_M above it);
+    # the pours are that ramp, the striped kerbs hump 5 cm on the way
+    assert abs(top - (0.05 if style == "stripes" else trackgen.GRASS_LIFT_M)) < 1e-9, (style, top)
+    for (x, y, z), (u, _) in zip(objs[name]["verts"], objs[name]["uvs"]):
+        assert u > 0 or abs(z - road_z) < 1e-9, ("inner edge on the asphalt", z)
+        assert u < 1 or abs(z - road_z - trackgen.GRASS_LIFT_M) < 1e-9, ("outer edge on the grass", z)
+    grass_z = [v[2] for v in objs["1GRASS"]["verts"] if abs(math.hypot(*v[:2]) - R) < 6]
+    assert abs(max(grass_z) - road_z - trackgen.GRASS_LIFT_M) < 1e-9, "verge grass a little above the asphalt"
 # kerbs narrow to a point at their ends over their taper (start, end); none where a kerb meets another kerb
 f = trackgen._kerb_taper([None, 0, 0, 0, 0, 0, 1, 1, None, None], [[2.0, 4.0], None], 1.0, 1.0)
 assert f[1] == 0.0 and abs(f[2] - 0.5) < 1e-9 and f[3] == 1.0, f  # kerb 0 starts with a 2 m taper
@@ -131,6 +139,10 @@ for o in (-2.0, 2.0):
 names = {o["name"] for o in g4["objects"]}
 assert {"LINES_LANES", "LINES_GRID", "LINES_START"} <= names, names
 assert len(next(o for o in g4["objects"] if o["name"] == "LINES_GRID")["faces"]) == 4 * 3  # painted boxes only
+road_z4 = max(v[2] for o in g4["objects"] if o["name"] == "1ROAD" for v in o["verts"])  # flat test track
+for o in g4["objects"]:  # markings lie on the asphalt (a few mm up against z-fighting), they don't float
+    if o["name"].startswith("LINES_"):
+        assert all(0 < v[2] - road_z4 <= 0.011 for v in o["verts"]), (o["name"], max(v[2] for v in o["verts"]) - road_z4)
 assert trackgen.validate(cfg, pts, g4)[0] == [], trackgen.validate(cfg, pts, g4)[0]
 
 # two photos: grass/terrain faces wholly inside the sharper track-area photo use it, the rest the terrain photo;
@@ -199,5 +211,34 @@ else:
     assert abs(r[10, 5] - 1) < 0.01 and abs(r[30, 35] - 1.1) < 0.01, (r[10, 5], r[30, 35])
     assert abs(r[19, 5] - 1) < 0.02 and abs(r[6, 6] - 1) < 0.02, "paint and tyres filled from the asphalt around"
     assert r.min() >= 0.9 and r.max() <= 1.2
+
+# ground height: exact track height on the asphalt even with a higher straight 8 m away (markings sit on it), smooth
+# in between (plates across an old shortcut don't step where the nearest straight switches)
+two = [[float(x), 0.0, 0.0, 4.0] for x in range(0, 40)] + [[float(x), 8.0, 0.6, 4.0] for x in range(39, -1, -1)]
+zf = trackgen._ground_fn(two, [10.0] * len(two), None)
+assert abs(zf(20.3, 1.5) + trackgen.GROUND_SINK_M) < 1e-9, zf(20.3, 1.5)  # on the low straight, 1.5 m off its axis
+assert abs(zf(20.3, 6.5) - 0.6 + trackgen.GROUND_SINK_M) < 1e-9  # on the high one
+mid = [zf(20.3, 2.0 + 0.1 * k) for k in range(41)]  # edge to edge across the gap
+assert all(b >= a - 1e-9 for a, b in zip(mid, mid[1:])) and max(b - a for a, b in zip(mid, mid[1:])) < 0.05, mid
+
+# ksEditor vertex count (KN5 limit): smooth = vertices, flat = face corners (upper bound)
+quad = {"verts": [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0), (2, 0, 0), (2, 1, 0)], "faces": [[0, 1, 2, 3], [1, 4, 5, 2]]}
+assert trackgen.ac_vertex_count({**quad, "material": "road"}) == 6
+assert trackgen.ac_vertex_count({**quad, "material": "kerb"}) == 8
+assert all(trackgen.ac_vertex_count(o) < 65535 for o in geo["objects"]), "an object over the KN5 vertex limit"
+
+# ksEditor persistence: every shader variable listed (unset = 0), textures in their slots (unset = NULL), CRLF
+import persistence  # noqa: E402
+ini = persistence.fbx_ini("t.fbx", {"road": ("ksMultilayer_fresnel_nm", {"multR": 24.8}, {"txDiffuse": "a.png"})},
+                          ["1ROAD"], ["AC_START_0"], no_shadow=["1ROAD"]).split("\r\n")
+assert "VARCOUNT=16" in ini and "VAR_6_FLOAT1=24.8" in ini and "VAR_0_FLOAT1=0.35" in ini, "values and lighting"
+assert "RES_0_TEXTURE=a.png" in ini and "RES_6_SLOT=21" in ini and "RES_6_TEXTURE=NULL" in ini
+assert "[model_FBX: t.fbx_1ROAD_1ROAD]" in ini and "CAST_SHADOWS=0" in ini
+assert "[model_FBX: t.fbx_AC_START_0]" in ini and "[model_FBX: t.fbx_AC_START_0_AC_START_0]" not in ini
+try:
+    persistence.fbx_ini("t.fbx", {"x": ("ksPerPixel", {}, {"txNormal": "n.png"})}, [], [])
+    raise AssertionError("a slot the shader doesn't have must fail")
+except AssertionError as e:
+    assert "has no" in str(e), e
 
 print("ok", f"{geo['length']:.2f} m,", sum(len(o['faces']) for o in geo['objects']), "faces")

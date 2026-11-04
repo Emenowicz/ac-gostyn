@@ -73,23 +73,29 @@ def _kerb_wear(albedo, h, w, seed, rubber=0.55):
     return mix(albedo, DIRT, 0.6 * dirt), wear
 
 
-def kerb_stripes(w=256, h=1024, stripes=8, seed=30):
-    """Red/yellow kerb, `stripes` stripes per 4 m tile along v (0.5 m), worn, rubbered, dirty."""
+def kerb_stripes(w=256, h=1024, stripes=8, seed=30, lip=0.84):
+    """Red/yellow kerb, `stripes` stripes per 4 m tile along v (0.5 m), worn, rubbered, dirty; the raised outer
+    edge (u > lip, the peak of the profile by the grass) is one continuous red band (photos of the track)."""
     y = np.arange(h)[:, None] * np.ones((1, w))
-    stripe = ((y * stripes // h) % 2).astype(float)
+    u = (np.arange(w)[None, :] + 0.5) / w * np.ones((h, 1))
+    stripe = ((y * stripes // h) % 2).astype(float) * (u < lip)
     grain = noise((h, w), 1.0, seed + 5)
     albedo = mix(np.full((h, w, 3), RED), YELLOW, stripe) * (1 + 0.05 * grain[..., None])
     albedo, wear = _kerb_wear(np.clip(albedo, 0, 1), h, w, seed)
     return np.clip(albedo, 0, 1), 0.5 * grain - 1.0 * wear
 
 
-def kerb_apron(w=256, h=1024, red_part=0.625, seed=40):
-    """Red-dyed concrete band (asphalt side) with a light outer border, concrete texture, rubber and dirt."""
+APRON_RED, APRON_BLUE = (0.74, 0.27, 0.24), (0.38, 0.48, 0.74)  # faded paint (orthophoto, ground photos 2025)
+
+
+def kerb_apron(w=256, h=1024, red_end=0.46, blue_end=0.90, seed=40):
+    """Painted concrete pour, across from the asphalt: a red band, a blue band, a thin white border by the grass
+    (orthophoto 2026-04 and ground photos 2025-10 of all three red pours); concrete texture, rubber and dirt."""
     base, height = concrete((h, w), CONCRETE, seed)
     u = (np.arange(w)[None, :] + 0.5) / w * np.ones((h, 1))
-    red = (u < red_part).astype(float)
     tone = base / np.asarray(CONCRETE)  # keep the concrete's light/dark variation, recoloured
-    albedo = mix(np.clip(tone * WHITE, 0, 1), np.clip(tone * RED, 0, 1), red)
+    paint = np.where((u < red_end)[..., None], APRON_RED, np.where((u < blue_end)[..., None], APRON_BLUE, WHITE))
+    albedo = np.clip(tone * paint, 0, 1)
     albedo, _ = _kerb_wear(albedo, h, w, seed + 3, rubber=0.4)
     return np.clip(albedo, 0, 1), height
 
@@ -212,6 +218,17 @@ def asphalt_macro(rgb, ref_px=None, radius_px=4, clip=(0.9, 1.2)):
     ref = ratio[ref_px] if ref_px is not None else ratio
     ref = np.nanmedian(ref) if np.isfinite(ref).any() else 1.0
     return np.clip(np.nan_to_num(ratio / ref, nan=1.0), *clip)
+
+
+PHOTO_SATURATION, PHOTO_GAIN = 1.8, 0.92
+
+
+def grade_photo(rgb, sat=PHOTO_SATURATION, gain=PHOTO_GAIN):
+    """Aerial photo -> texture colours: the haze leaves the grass pale and bluish (0.31 0.36 0.28 on the 5 cm photo,
+    vs 0.30 0.33 0.18 for diffuse x detail on the Kunos tracks and 0.33 0.45 0.22 on a ground photo of the track).
+    Saturation up around the luminance, a little darker; greys (asphalt) keep their tone."""
+    lum = (rgb * np.array([0.2126, 0.7152, 0.0722])).sum(-1, keepdims=True)
+    return np.clip((lum + (rgb - lum) * sat) * gain, 0, 1)
 
 
 def write_png(path, rgba):

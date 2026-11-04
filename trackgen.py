@@ -11,16 +11,28 @@ from itertools import combinations
 
 UV_M = 4.0  # metres per texture tile
 ROAD_UV_M = 8.0  # asphalt (track and plates): a bigger tile, so its repeats don't show as a grid
+# smooth shading (one normal per vertex) for the gently curved ground-like surfaces; the rest is flat shaded (tyres:
+# smooth shading blurs their sharp rims), and ksEditor then splits a vertex into a copy per face around it (the copies
+# count towards the KN5 65534-vertex limit, see ac_vertex_count; the tyre stacks are split into several objects)
+SMOOTH_MATERIALS = {"road", "paint_white", "paint_mint", "chequer", "ortho", "ortho_near", "grass", "ground"}
 GROUND_SINK_M = 0.05  # terrain sits below the drivable surfaces to avoid z-fighting
-# kerb "style" in features.json -> (AC object name = physics, material, raised by [m]). Painted kerbs drive as KERB;
-# the concrete pours (red or grey) are slightly raised like a kerb but rumble much less: own APRON surface
-# (project author). One object per material, so the two pours are 1APRON and 2APRON.
-KERB_STYLES = {"stripes": ("1KERB", "kerb", 0.0),  # red/yellow stripes, 0.5 m
-               "apron": ("1APRON", "kerb_apron", 0.03),  # red-dyed concrete band with a light outer border
-               "concrete": ("2APRON", "kerb_concrete", 0.03)}  # plain grey concrete
+EDGE_BLEND_M = 2.0  # beyond the asphalt edge the ground height eases from the track's into a smooth average
+# the verge grass lies a little above the asphalt; kerbs and concrete pours are the climb from one to the other
+# (project author). Without a kerb the grass itself ramps up across the kerb-width strip next to the asphalt.
+GRASS_LIFT_M = 0.04
+# kerb "style" in features.json -> (AC object name = physics, material, peak height [m]). Painted kerbs drive as KERB;
+# the concrete pours (red or grey) rumble much less: own APRON surface (project author). One object per material, so
+# the two pours are 1APRON and 2APRON.
+KERB_STYLES = {"stripes": ("1KERB", "kerb", 0.05),  # red/yellow stripes, 0.5 m, 5 cm hump (project author)
+               "apron": ("1APRON", "kerb_apron", GRASS_LIFT_M),  # red-dyed concrete band with a light outer border
+               "concrete": ("2APRON", "kerb_concrete", GRASS_LIFT_M)}  # plain grey concrete
+# cross-section: (fraction of the width from the asphalt, fraction of the peak height). Striped kerbs rise gently from
+# the asphalt, peak near the grass and come down onto the grass (project author); the pours are a plain ramp
+KERB_PROFILE = {"stripes": [(0.0, 0.0), (0.25, 0.1), (0.5, 0.35), (0.68, 0.68), (0.8, 0.92), (0.86, 1.0),
+                            (0.93, 0.9), (1.0, GRASS_LIFT_M / 0.05)],
+                "apron": [(0.0, 0.0), (1.0, 1.0)], "concrete": [(0.0, 0.0), (1.0, 1.0)]}
 KERB_OBJECTS = {name for name, _, _ in KERB_STYLES.values()}
-KERB_RAMP_M = 0.15  # a raised kerb climbs and drops over this width at both sides (no vertical step to catch a wheel)
-KERB_END_RAMP_M = 0.6  # ... and over this length where it starts and ends along the track
+KERB_END_RAMP_M = 0.6  # where a kerb starts / ends, its hump blends into the grass ramp over this length
 
 
 def load(track_path, csv_path):
@@ -188,6 +200,20 @@ def _kerb_taper(ids, tapers, ds, default):
     return out
 
 
+def _chunks(name, material, parts, limit=60000):
+    """Parts merged into as few objects as keep each under `limit` face corners (= vertices in ksEditor when flat
+    shaded): name, name_2, name_3..."""
+    groups, count = [[]], 0
+    for p in parts:
+        c = sum(len(f) for f in p[1])
+        if groups[-1] and count + c > limit:
+            groups.append([])
+            count = 0
+        groups[-1].append(p)
+        count += c
+    return [_merge(name if i == 0 else f"{name}_{i + 1}", material, g) for i, g in enumerate(groups)]
+
+
 def _merge(name, material, parts):
     verts, faces, uvs = [], [], []
     for v, f, uv in parts:
@@ -207,6 +233,20 @@ def load_ground(path):
     xs, ys = sorted({r[0] for r in rows}), sorted({r[1] for r in rows})
     cell = xs[1] - xs[0]
     grid = {(round((x - xs[0]) / cell), round((y - ys[0]) / cell)): h for x, y, h in rows}
+    # GUGiK gives heights to 0.1 m: bilinear between them makes 10 cm terraces (waves on the plates and the grass).
+    # Two passes of a 3 x 3 binomial filter (the cells at the edge average what they have) smooth them away.
+    for _ in range(2):
+        out = {}
+        for (i, j) in grid:
+            acc = wsum = 0.0
+            for di in (-1, 0, 1):
+                for dj in (-1, 0, 1):
+                    h = grid.get((i + di, j + dj))
+                    if h is not None:
+                        w = (2 - abs(di)) * (2 - abs(dj))
+                        acc, wsum = acc + w * h, wsum + w
+            out[i, j] = acc / wsum
+        grid = out
 
     def height(x, y):
         fx = min(max((x - xs[0]) / cell, 0), len(xs) - 1.0001)
@@ -219,12 +259,36 @@ def load_ground(path):
 
 def _ground_fn(samples, reach, ground):
     """Height of the ground at (x, y): track height inside `reach` of the centreline, blending into NMT beyond it.
+    On the asphalt the track height is exact (the centreline between the two nearest samples: markings and plates
+    under the track sit right on it); over EDGE_BLEND_M beyond the edge it blends into an inverse-distance (1/d^4)
+    average of the samples, which runs smoothly across a plate between two straights instead of stepping where the
+    nearest sample switches from one straight to the other.
 
-    ponytail: nearest-sample search is O(samples) per call, ~2 s for the whole terrain; use a grid index if it grows.
+    ponytail: O(samples) per call, a few s for the whole terrain; use a grid index if it grows.
     """
+    n = len(samples)
+
+    def exact(x, y, k):  # track height at the projection on the centreline segment k-1..k or k..k+1
+        best = None
+        for a, b in ((samples[k - 1], samples[k]), (samples[k], samples[(k + 1) % n])):
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            t = min(max(((x - a[0]) * dx + (y - a[1]) * dy) / ((dx * dx + dy * dy) or 1e-12), 0.0), 1.0)
+            d = (x - a[0] - t * dx) ** 2 + (y - a[1] - t * dy) ** 2
+            if best is None or d < best[0]:
+                best = (d, a[2] + t * (b[2] - a[2]))
+        return best[1]
+
     def z_at(x, y):
-        d2, k = min(((x - s[0]) ** 2 + (y - s[1]) ** 2, k) for k, s in enumerate(samples))
-        z = samples[k][2] - GROUND_SINK_M
+        d2s = [(x - s[0]) ** 2 + (y - s[1]) ** 2 for s in samples]
+        k = min(range(n), key=d2s.__getitem__)
+        d2 = d2s[k]
+        z = exact(x, y, k)
+        off_edge = math.sqrt(d2) - samples[k][3] / 2
+        if off_edge > 0:
+            ws = [1.0 / (d + 0.25) ** 2 for d in d2s]
+            idw = sum(w * s[2] for w, s in zip(ws, samples)) / sum(ws)
+            z += min(off_edge / EDGE_BLEND_M, 1.0) * (idw - z)
+        z -= GROUND_SINK_M
         if ground:
             t = min(max((math.sqrt(d2) - reach[k]) / 6.0, 0.0), 1.0)
             z += t * (ground(x, y) - GROUND_SINK_M - z)
@@ -562,22 +626,18 @@ def build(cfg, pts, ground=None, features=None, photo=None, photo_near=None):
     kerbs, grass, outer = {s: [] for s in KERB_STYLES}, [], {}
     for side in (1, -1):
         edge = road_l if side == 1 else road_r
-        ko = rows([side * o for o in kerb_out[side]])
+        ko = rows([side * o for o in kerb_out[side]], GRASS_LIFT_M)  # the grass level beside the track
         outer[side] = rows([side * o for o in wall_off[side]], zfn=ground_z)  # run-off slopes down onto the terrain
         flip = side < 0
-        for s, (_, _, lift) in KERB_STYLES.items():
+        for s, (_, _, peak) in KERB_STYLES.items():  # (not `lift`: that is the markings' lift, used further down)
             mask = [m and st == s for m, st in zip(kerb[side], style[side])]
-            if lift:  # cross-section: edge -> ramp up -> flat top -> ramp down -> outer edge (u 0 -> 1 across)
-                ramp = [min(KERB_RAMP_M, (o - h) / 3) for h, o in zip(half, kerb_out[side])]
-                up = _end_taper(mask, lift, ds, KERB_END_RAMP_M)  # and along the track: no step where it starts/ends
-                prof = [rows([side * h for h in half], u=0.0),
-                        rows([side * (h + r) for h, r in zip(half, ramp)], up, u=0.1),
-                        rows([side * (o - r) for o, r in zip(kerb_out[side], ramp)], up, u=0.9),
-                        rows([side * o for o in kerb_out[side]], u=1.0)]
-                kerbs[s] += [_strip(a, b, mask, flip) for a, b in zip(prof, prof[1:])]
-            else:
-                kerbs[s].append(_strip(rows([side * h for h in half], u=0.0),
-                                       rows([side * o for o in kerb_out[side]], u=1.0), mask, flip))
+            # along the track: full profile inside a kerb, blending into the plain grass ramp (0 -> GRASS_LIFT_M)
+            # where it starts / ends, so the kerb meets the grass beside it without a step or a gap
+            t = _end_taper(mask, 1.0, ds, KERB_END_RAMP_M)
+            prof = [rows([side * (h + f * (o - h)) for h, o in zip(half, kerb_out[side])],
+                         [f * GRASS_LIFT_M + ti * (z * peak - f * GRASS_LIFT_M) for ti in t], u=f)
+                    for f, z in KERB_PROFILE[s]]
+            kerbs[s] += [_strip(a, b, mask, flip) for a, b in zip(prof, prof[1:])]
         grass.append(_strip(edge, ko, [not m and f for m, f in zip(kerb[side], off_plate(edge, ko))], flip))
         grass.append(_strip(ko, outer[side], off_plate(ko, outer[side]), flip))
     objects += [_merge(name, material, kerbs[s]) for s, (name, material, _) in KERB_STYLES.items()]
@@ -600,7 +660,8 @@ def build(cfg, pts, ground=None, features=None, photo=None, photo_near=None):
                (lambda x, y: ground_z(x, y) - 0.02)
         for colour, part in _tyre_stacks(line, base, heights.get(name, cfg["wall_height_m"])).items():
             stacks[colour].append(part)
-    objects += [_merge(f"TYRES_{c.split('_')[1].upper()}", c, parts) for c, parts in stacks.items()]  # visual only
+    for c, parts in stacks.items():  # visual only; flat shaded (crisp edges), so split to stay under the KN5 limit
+        objects += _chunks(f"TYRES_{c.split('_')[1].upper()}", c, parts)
 
     # painted markings (visual only, lifted like the edge lines; the chequered line a little higher where they cross)
     on_road = lambda dz: (lambda x, y: z_at(x, y) + GROUND_SINK_M + dz)
@@ -755,6 +816,15 @@ def _crossings(polylines, cell=5.0):
     return [(segs[u], segs[v]) for u, v in sorted(hits)]
 
 
+def ac_vertex_count(o):
+    """Vertices ksEditor makes of object o: smooth shaded = one per vertex (UVs are per vertex too); flat shaded =
+    counted as one per face corner, an upper bound (ksEditor merges a few corners of coplanar neighbours: 155796 of
+    166239 corners for a flat 2ROAD, 75856 of 77408 for flat TYRES_RED)."""
+    if o["material"] in SMOOTH_MATERIALS:
+        return len(o["verts"])
+    return sum(len(f) for f in o["faces"])
+
+
 def _normal(verts, face):
     nx = ny = nz = 0.0
     for a, b in zip(face, face[1:] + face[:1]):  # Newell's method
@@ -855,8 +925,9 @@ def validate(cfg, pts, geo):
         elif on & KERB_OBJECTS and name not in geo.get("on_kerb", ()):
             warnings.append(f"barrier {name} stands on a kerb - fine if the tyres really lie there (check the overlay)")
     for o in geo["objects"]:
-        if len(o["verts"]) >= 65535:
-            errors.append(f"{o['name']}: {len(o['verts'])} vertices, KN5 limit is 65534 per object - split it")
+        n_ac = ac_vertex_count(o)
+        if n_ac >= 65535:
+            errors.append(f"{o['name']}: {n_ac} vertices in ksEditor, KN5 limit is 65534 per object - split it")
         if o["name"] == "1ROAD" and len(o["faces"]) != len(sm):  # one quad per sample = no holes
             errors.append(f"1ROAD has {len(o['faces'])} quads for {len(sm)} samples - asphalt has holes")
         wall = o["name"].endswith("WALL")  # vertical sides are fine, upside-down not
