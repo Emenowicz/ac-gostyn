@@ -19,11 +19,16 @@ COLORS = {"grass": (0.18, 0.40, 0.12), "ground": (0.22, 0.36, 0.15)}
 INVISIBLE = {"collider"}  # fully transparent (alpha 0): collision-only objects, shader ksPerPixelAT in ksEditor
 PHOTOS = ("ortho", "ortho_near")  # orthophotos: + mask and detail textures (ksMultilayer in ksEditor)
 MATTE = set(PHOTOS) | {"grass", "ground"}
+# asphalt on the sharp photo's UVs (trackgen drapes 1ROAD / 2ROAD when there is one): base = the photo's asphalt
+# brightness map (road_macro), detail = the 8 m asphalt tile
+ROAD_MACRO = bool(data.get("photo_near"))
+MACRO_GREY = 0.5  # road_macro stores 0.5 x the brightness ratio -> magicMult 2
 RED, YELLOW = (0.72, 0.07, 0.06), (0.93, 0.72, 0.08)
 STRIPES = {}  # stripes per tile, axis (0 = u / image x, 1 = v / image y)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import textures  # noqa: E402  (numpy, bundled with Blender)
+from trackgen import ROAD_UV_M  # noqa: E402
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
@@ -32,6 +37,7 @@ os.makedirs(texdir, exist_ok=True)
 for stale in os.listdir(texdir):  # only this build's textures should sit next to the FBX
     os.remove(os.path.join(texdir, stale))
 materials = {}
+road_tile = []  # (road.png, road_nm.png) when the asphalt uses road_macro
 
 
 def save_image(name, rgb, colorspace="sRGB"):
@@ -47,6 +53,18 @@ def save_image(name, rgb, colorspace="sRGB"):
     return img
 
 
+_photos = {}
+
+
+def load_photo(key):
+    """The GUGiK photo data[key] ("photo" / "photo_near") as a 4096^2 image; loaded once (the road map reuses it)."""
+    if key not in _photos:
+        img = bpy.data.images.load(data[key])
+        img.scale(4096, 4096)
+        _photos[key] = img
+    return _photos[key]
+
+
 def photo_mask(name, img):
     """<name>_mask.png next to the photo (R = grass, G = bare soil; half the photo's resolution is plenty)."""
     import numpy as np
@@ -56,6 +74,25 @@ def photo_mask(name, img):
     rgb = px.reshape(h, w, 4)[..., :3]
     rgb = rgb.reshape(h // 2, 2, w // 2, 2, 3).mean(axis=(1, 3))
     textures.write_png(os.path.join(texdir, name + "_mask.png"), textures.ortho_mask(rgb))
+
+
+def road_macro():
+    """road_macro.png: the asphalt brightness map from the sharp photo (grey, 0.5 = the median asphalt), plus the
+    asphalt tile road.png / road_nm.png as its detail and a solid-red mask (one detail layer only)."""
+    import numpy as np
+    img = load_photo("photo_near")
+    w, h = img.size
+    px = np.empty(w * h * 4, np.float32)
+    img.pixels.foreach_get(px)
+    uvs = [uv for o in data["objects"] if o["name"] in ("1ROAD", "2ROAD") for uv in o["uvs"]]
+    ref = tuple(np.clip(np.array([[int(v * h) for _, v in uvs], [int(u * w) for u, _ in uvs]]), 0, h - 1))
+    ratio = textures.asphalt_macro(px.reshape(h, w, 4)[..., :3], ref_px=ref)  # 1 = the track's median asphalt
+    macro = save_image("road_macro", np.repeat((MACRO_GREY * ratio)[..., None], 3, axis=2))
+    make, strength = textures.SURFACES["road"]
+    albedo, height = make()
+    tile = (save_image("road", albedo), save_image("road_nm", textures.normal_map(height, strength), "Non-Color"))
+    textures.write_png(os.path.join(texdir, "mask_r.png"), np.tile([1.0, 0, 0, 0], (4, 4, 1)))
+    return macro, tile
 
 
 def detail_textures():
@@ -69,7 +106,7 @@ def detail_textures():
 
 
 def photo_settings(details):
-    """build/fbx/ksEditor_ortho.txt: shader settings for the photo materials (the UV multipliers depend on the
+    """build/fbx/ksEditor_multilayer.txt: shader settings for the photo and asphalt materials (the UV multipliers depend on the
     photo's extent, so they are computed here instead of written into the README)."""
     lines = []
     for name, key in (("ortho", "photo"), ("ortho_near", "photo_near")):
@@ -87,7 +124,17 @@ def photo_settings(details):
                   f"  magicMult = {round(1 / textures.DETAIL_MEAN, 2)}  (detail textures average {textures.DETAIL_MEAN};"
                   " darker / lighter than the photo in AC -> change this)",
                   "  ksSpecular = 0, fresnelC = 0, fresnelMaxLevel = 0  (matte: no sheen at grazing angles)", ""]
-    with open(os.path.join(os.path.dirname(os.path.abspath(out)), "ksEditor_ortho.txt"), "w") as f:
+    if ROAD_MACRO and "road" in materials:
+        with open(os.path.splitext(data["photo_near"])[0] + ".json") as f:
+            uv = json.load(f)["uv"]
+        per_m = (abs(uv[0][0]) + abs(uv[1][1])) / 2
+        lines += ["[road]  shader ksMultilayer_fresnel_nm4 (or ksMultilayer without the normals)",
+                  "  txDiffuse = road_macro.png  (the photo's asphalt brightness, grey)   txMask = mask_r.png",
+                  "  txDetailR = txDetailG = txDetailB = txDetailA = road.png   txNormalR = road_nm.png   (nm4 only)",
+                  f"  multR = multG = multB = multA = {round(1 / (per_m * ROAD_UV_M), 1)}",
+                  f"  magicMult = {round(1 / MACRO_GREY, 2)}  (road_macro is {MACRO_GREY} x the brightness ratio;"
+                  " darker / lighter asphalt than road.png in AC -> change this)", ""]
+    with open(os.path.join(os.path.dirname(os.path.abspath(out)), "ksEditor_multilayer.txt"), "w") as f:
         f.write("\n".join(lines))
 
 
@@ -144,16 +191,48 @@ def preview_details(details):
         nodes.active = photo  # Workbench (menu preview) draws the active image: the photo
 
 
+def preview_road():
+    """.blend / preview only: road_macro (UV) x the asphalt tile (8 m, world position) + the tile's normals."""
+    mat = materials.get("road")
+    if not (ROAD_MACRO and mat and road_tile):
+        return
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    bsdf = next(n for n in nodes if n.type == "BSDF_PRINCIPLED")
+    macro = next(n for n in nodes if n.type == "TEX_IMAGE")
+    pos, mp = nodes.new("ShaderNodeNewGeometry"), nodes.new("ShaderNodeMapping")
+    mp.inputs["Scale"].default_value = (1 / ROAD_UV_M,) * 3
+    links.new(pos.outputs["Position"], mp.inputs["Vector"])
+    t, nt = nodes.new("ShaderNodeTexImage"), nodes.new("ShaderNodeTexImage")
+    t.image, nt.image = road_tile
+    for node in (t, nt):
+        links.new(mp.outputs["Vector"], node.inputs["Vector"])
+    mul = nodes.new("ShaderNodeMix")
+    mul.data_type, mul.blend_type = "RGBA", "MULTIPLY"
+    mul.inputs["Factor"].default_value = 1.0
+    links.new(macro.outputs["Color"], mul.inputs[6])
+    links.new(t.outputs["Color"], mul.inputs[7])
+    gain = nodes.new("ShaderNodeVectorMath")
+    gain.operation = "SCALE"
+    gain.inputs["Scale"].default_value = float(1 / (((MACRO_GREY + 0.055) / 1.055) ** 2.4))  # linear grey -> 1
+    links.new(mul.outputs[2], gain.inputs[0])
+    links.new(gain.outputs["Vector"], bsdf.inputs["Base Color"])
+    nmap = nodes.new("ShaderNodeNormalMap")
+    links.new(nt.outputs["Color"], nmap.inputs["Color"])
+    links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
+    nodes.active = t  # Workbench (menu preview): the asphalt tile reads better than the grey map
+
+
 def material(name):
     if name not in materials:
         normal = None
         if name in ("ortho", "ortho_near"):  # GUGiK orthophotos, resampled to a power-of-two texture
-            img = bpy.data.images.load(data["photo" if name == "ortho" else "photo_near"])
-            img.scale(4096, 4096)
+            img = load_photo("photo" if name == "ortho" else "photo_near")
             img.filepath_raw = os.path.join(texdir, name + ".png")
             img.file_format = "PNG"
             img.save()
             photo_mask(name, img)
+        elif name == "road" and ROAD_MACRO:  # FBX: the brightness map; the tile is its detail (ksMultilayer)
+            img, road_tile[:] = road_macro()
         elif name in textures.SURFACES:  # procedural texture + normal map (shader ksPerPixelNM in ksEditor)
             make, strength = textures.SURFACES[name]
             albedo, height = make()
@@ -256,6 +335,7 @@ bpy.ops.export_scene.fbx(
 print(f"exported {len(data['objects'])} meshes, {len(data['empties'])} empties -> {out}")
 if details:  # the .blend (and the menu preview) show the photo with its detail, as ksMultilayer should in AC
     preview_details(details)
+preview_road()
 bpy.ops.wm.save_as_mainfile(filepath=os.path.splitext(os.path.abspath(out))[0] + ".blend")
 
 preview = sys.argv[sys.argv.index("--") + 1:][2:3]

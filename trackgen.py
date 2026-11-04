@@ -10,6 +10,7 @@ from collections import defaultdict
 from itertools import combinations
 
 UV_M = 4.0  # metres per texture tile
+ROAD_UV_M = 8.0  # asphalt (track and plates): a bigger tile, so its repeats don't show as a grid
 GROUND_SINK_M = 0.05  # terrain sits below the drivable surfaces to avoid z-fighting
 # kerb "style" in features.json -> (AC object name = physics, material, raised by [m]). Painted kerbs drive as KERB;
 # the concrete pours (red or grey) are slightly raised like a kerb but rumble much less: own APRON surface
@@ -346,7 +347,7 @@ def _plate(poly, z_at, cell=1.0):
                 faces.append([idx[i, j], idx[i + 1, j], idx[i, j + 1]])
                 if i + j < k - 1:
                     faces.append([idx[i + 1, j], idx[i + 1, j + 1], idx[i, j + 1]])
-    return verts, faces, [(x / UV_M, y / UV_M) for x, y, _ in verts]
+    return verts, faces, [(x / ROAD_UV_M, y / ROAD_UV_M) for x, y, _ in verts]
 
 
 TYRE_R = 0.3  # tyre barriers: car tyres lying flat, 0.6 m across (= wall_thickness_m), ~0.2 m each
@@ -525,7 +526,7 @@ def build(cfg, pts, ground=None, features=None, photo=None, photo_near=None):
     road_l, road_r = rows(half), rows([-h for h in half])
     objects = [_merge("1ROAD", "road", [_strip(road_r, road_l, every, False)])]
     # asphalt texture in plan (like the plates): along-track UVs squeeze it at the inside of a hairpin
-    objects[0]["uvs"] = [(v[0] / UV_M, v[1] / UV_M) for v in objects[0]["verts"]]
+    objects[0]["uvs"] = [(v[0] / ROAD_UV_M, v[1] / ROAD_UV_M) for v in objects[0]["verts"]]
     # painted lines: visual only (no digit prefix = no physics in AC), lifted 5 mm so they don't z-fight the asphalt
     lift, lw = 0.005, cfg["line_width_m"]
     edge_lines = [_strip(rows([side * (h - lw - 0.05) for h in half], lift), rows([side * (h - 0.05) for h in half], lift),
@@ -643,7 +644,11 @@ def build(cfg, pts, ground=None, features=None, photo=None, photo_near=None):
         drape = lambda o, mat, ph: dict(o, material=mat, uvs=[photo_uv(ph)(v[0], v[1]) for v in o["verts"]])
         out = []
         for o in objects:
-            if o["name"] not in ("1GRASS", "2GRASS"):
+            if o["name"] in ("1ROAD", "2ROAD") and photo_near:
+                # asphalt on the sharp photo's UVs: its brightness map (rubbered line, darker / lighter sections)
+                # is the base, the 8 m asphalt tile the detail on top (ksMultilayer, multR = photo / ROAD_UV_M)
+                out.append(drape(o, "road", photo_near))
+            elif o["name"] not in ("1GRASS", "2GRASS"):
                 out.append(o)
             elif photo_near:  # faces wholly inside the sharper track-area photo use it; the rest the terrain photo
                 ne = (photo_near["x0"], photo_near["y0"], photo_near["x1"], photo_near["y1"])

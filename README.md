@@ -84,7 +84,7 @@ build/ortho_overlay.svg                   model na ortofotomapie – otwórz w p
 
    | Materiał | Shader | Tekstury | Gdzie |
    |---|---|---|---|
-   | `road` | `ksPerPixelNM` | `road`, `road_nm` | asfalt, płyty dodatkowego asfaltu |
+   | `road` | `ksMultilayer_fresnel_nm4` | `road_macro`, `mask_r`, detal `road`, `road_nm` – niżej | asfalt, płyty dodatkowego asfaltu |
    | `kerb` | `ksPerPixelNM` | `kerb`, `kerb_nm` | tarki (paski czerwono-żółte) |
    | `kerb_apron` | `ksPerPixelNM` | `kerb_apron`, `kerb_apron_nm` | wylewki z czerwonego betonu (`1APRON`) |
    | `kerb_concrete` | `ksPerPixelNM` | `kerb_concrete`, `kerb_concrete_nm` | szare betonowe wylewki (`2APRON`) |
@@ -101,12 +101,19 @@ build/ortho_overlay.svg                   model na ortofotomapie – otwórz w p
    trawa (`grass_detail`, kafel 1,5 m) albo goła ziemia – wytarte pobocza, piach, żwir (`soil_detail`, kafel 2 m).
    Który detal gdzie, mówi maska `<zdjęcie>_mask.png` liczona ze zdjęcia: R = trawa, G = bez trawy, B = A = 0.
    Kolor zostaje ze zdjęcia, detal (szarawy mnożnik o średniej 0,8) dodaje źdźbła, grudy i kamyki. Komplet ustawień
-   z mnożnikami UV wyliczonymi z zasięgu zdjęcia zapisuje build do `build/fbx/ksEditor_ortho.txt`:
+   z mnożnikami UV wyliczonymi z zasięgu zdjęcia zapisuje build do `build/fbx/ksEditor_multilayer.txt`:
    `txDiffuse` = zdjęcie, `txMask` = maska, `txDetailR` = `grass_detail`, `txDetailG` = `soil_detail`,
    `txNormalR/G` = ich `_nm`, `multR/multG` z pliku, `magicMult` = 1,25. Trawa i ziemia są matowe:
    `ksSpecular` = 0 i fresnel 0, inaczej pod niskim kątem pobocze robi się szarobiałe. **Nie sprawdzone jeszcze w AC**:
    gdyby pobocze wyszło ciemniejsze lub jaśniejsze niż zdjęcie, popraw `magicMult`; bez map normalnych wystarczy
    `ksMultilayer`. Podgląd w `.blend` pokazuje zdjęcie już z detalem (FBX niesie samo zdjęcie).
+
+   **Asfalt** działa tak samo: bazą jest `road_macro` – jasność asfaltu ze zdjęcia 5 cm (zjeżdżona linia jazdy,
+   jaśniejsze i ciemniejsze odcinki; bez białych linii, opon i trawy, przycięte do −10…+20 %, bo głębsze ciemne plamy
+   to cień drzew, który AC rysuje sam), detalem kafel `road` 8 × 8 m (2048 px, bez wyróżniających się plam, żeby
+   nie było widać powtórzeń). Maska `mask_r` = sam kanał R, `magicMult` = 2 (baza jest szara, 0,5 = mediana asfaltu
+   toru). Ustawienia w tym samym pliku, sekcja `[road]`. Bez zdjęcia (`build.py` bez ortofotomapy) asfalt ma zwykłe
+   UV kafla i wystarczy `ksPerPixelNM` z `road` / `road_nm`.
 
    Mapy normalnych są w konwencji OpenGL (zielony = +v). Gdyby faktura wyglądała jak wklęsła zamiast wypukłej,
    odwróć kanał zielony (albo ustaw mnożnik normalnych na ujemny).

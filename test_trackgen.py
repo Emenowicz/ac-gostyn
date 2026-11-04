@@ -190,5 +190,14 @@ else:
     m = textures.ortho_mask(photo_px)
     assert m.shape == (40, 40, 4) and np.allclose(m[..., 0] + m[..., 1], 1) and not m[..., 2:].any()
     assert m[:, :10, 0].min() > 0.99 and m[:, 30:, 1].min() > 0.99, "mask: grass in R, bare soil in G"
+    # asphalt brightness map: 1 at the reference asphalt, paint / tyres ignored (filled from around), clipped
+    road_px = np.full((40, 40, 3), 0.40)
+    road_px[:, 25:] = 0.44  # a lighter, less rubbered band
+    road_px[18:21, :] = 0.95  # a white line across
+    road_px[5:8, 5:8] = (0.6, 0.1, 0.1)  # a red tyre
+    r = textures.asphalt_macro(road_px, ref_px=(np.arange(40).repeat(10), np.tile(np.arange(10), 40)))
+    assert abs(r[10, 5] - 1) < 0.01 and abs(r[30, 35] - 1.1) < 0.01, (r[10, 5], r[30, 35])
+    assert abs(r[19, 5] - 1) < 0.02 and abs(r[6, 6] - 1) < 0.02, "paint and tyres filled from the asphalt around"
+    assert r.min() >= 0.9 and r.max() <= 1.2
 
 print("ok", f"{geo['length']:.2f} m,", sum(len(o['faces']) for o in geo['objects']), "faces")

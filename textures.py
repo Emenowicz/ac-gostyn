@@ -5,8 +5,8 @@ without seams; fixed seeds make every build write the same images. Arrays are ro
 order), x = texture u, y = texture v. Each maker returns (albedo (h, w, 3), height (h, w)); normal_map() turns the
 height into a tangent-space normal map (OpenGL convention: green = +v).
 
-Texel sizes match the UVs written by trackgen (UV_M = 4 m per tile): asphalt and concrete 1024 px per 4 m
-(4 mm/px), kerbs 256 px across the kerb (u 0..1) x 1024 px per 4 m along it.
+Texel sizes match the UVs written by trackgen (UV_M = 4 m per tile, ROAD_UV_M = 8 m for asphalt): asphalt 2048 px
+per 8 m and concrete 1024 px per 4 m (4 mm/px), kerbs 256 px across the kerb (u 0..1) x 1024 px per 4 m along it.
 """
 import numpy as np
 
@@ -41,16 +41,16 @@ def normal_map(height, strength):
     return n / np.linalg.norm(n, axis=2, keepdims=True) * 0.5 + 0.5
 
 
-def asphalt(size=1024, seed=10):
-    """Asphalt concrete: fine grain, light and dark aggregate, soft blotches and smoother darker repair patches."""
+def asphalt(size=2048, seed=10):
+    """Asphalt concrete, 8 m tile (ROAD_UV_M) at 4 mm/px: fine grain, light and dark aggregate, a faint mottle.
+    Nothing bigger than ~15 cm and nothing that stands out: across 800 m of track a 0.5 m blotch or a repair patch
+    in the tile shows up as a regular grid; uniform fine texture doesn't."""
     s = (size, size)
-    grain, stones, mottle, patches = (noise(s, sig, seed + k) for k, sig in enumerate((0.8, 1.6, 35, 120)))
+    grain, stones, mottle = (noise(s, sig, seed + k) for k, sig in enumerate((0.8, 1.6, 35)))
     light, dark = smoothstep(1.3, 2.2, stones), smoothstep(1.5, 2.5, -stones)
-    patch = smoothstep(0.9, 1.4, patches)  # sealed repairs: darker, smoother
-    rough = 1 - 0.6 * patch
-    v = (0.035 * grain + 0.10 * light - 0.08 * dark) * rough + 0.012 * mottle - 0.035 * patch
+    v = 0.035 * grain + 0.10 * light - 0.08 * dark + 0.008 * mottle
     albedo = np.clip(np.asarray(ASPHALT) + v[..., None], 0, 1)
-    return albedo, (0.5 * grain + 1.5 * light - 0.8 * dark) * rough
+    return albedo, 0.5 * grain + 1.5 * light - 0.8 * dark
 
 
 def concrete(size=(1024, 1024), base=CONCRETE, seed=20):
@@ -192,6 +192,26 @@ def ortho_mask(rgb, blur_px=2):
         grass = _box_blur(grass, blur_px)
     z = np.zeros_like(grass)
     return np.dstack((grass, 1 - grass, z, z))
+
+
+def asphalt_macro(rgb, ref_px=None, radius_px=4, clip=(0.9, 1.2)):
+    """Brightness map of the asphalt on an orthophoto (h, w, 3, 0..1) -> (h, w) multiplier around 1: the rubbered
+    racing line, darker and lighter sections (clipped at -10 %: deeper is tree shadow, which AC draws itself).
+    Only plain asphalt counts (grey, neither white paint - nor the 2 px of blur around
+    it - nor dark tyres or shadows, no grass or kerb colour); the gaps are filled from the asphalt
+    around (normalised box blur, which also smooths away the pixel noise). 1 = the median of the pixels ref_px
+    ((rows, cols): the track's own asphalt; default all of it), clipped."""
+    lum = rgb.mean(axis=2)
+    sat = rgb.max(axis=2) - rgb.min(axis=2)
+    near_paint = _box_blur((lum > 0.62).astype(float), 2) > 0
+    valid = ((sat < 0.08) & (lum > 0.12) & (lum < 0.62) & ~near_paint).astype(float)
+    num, den = lum * valid, valid
+    for _ in range(2):
+        num, den = _box_blur(num, radius_px), _box_blur(den, radius_px)
+    ratio = np.where(den > 0.05, num / np.maximum(den, 1e-6), np.nan)
+    ref = ratio[ref_px] if ref_px is not None else ratio
+    ref = np.nanmedian(ref) if np.isfinite(ref).any() else 1.0
+    return np.clip(np.nan_to_num(ratio / ref, nan=1.0), *clip)
 
 
 def write_png(path, rgba):
